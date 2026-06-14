@@ -40,22 +40,30 @@ impl SearchConsoleMcp {
             client,
             profile,
             tool_inventory,
-            tool_inventory_policy: ToolInventoryPolicy::strict(),
+            tool_inventory_policy: tool_inventory_policy_for_profile(profile),
             tool_router: Self::tool_router_search_console(),
         }
     }
 
     pub fn tool_names(&self) -> Vec<String> {
-        self.tool_router
-            .list_all()
+        self.visible_tools()
             .into_iter()
             .map(|tool| tool.name.to_string())
             .collect()
     }
 
     pub fn tool_schema_snapshot(&self) -> Value {
-        tool_schema_snapshot_value(&self.tool_router.list_all())
+        tool_schema_snapshot_value(&self.visible_tools())
             .expect("registered tool definitions should serialize")
+    }
+
+    pub(crate) fn visible_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_inventory.filter_tools(
+            self.tool_router.list_all(),
+            ToolOperation::List,
+            &self.tool_inventory_policy,
+            |tool| tool.name.as_ref(),
+        )
     }
 
     fn is_tool_allowed(&self, tool_name: &str) -> bool {
@@ -85,12 +93,7 @@ impl ServerHandler for SearchConsoleMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send + '_ {
-        let tools = self.tool_inventory.filter_tools(
-            self.tool_router.list_all(),
-            ToolOperation::List,
-            &self.tool_inventory_policy,
-            |tool| tool.name.as_ref(),
-        );
+        let tools = self.visible_tools();
         std::future::ready(Ok(ListToolsResult {
             meta: None,
             tools,
@@ -145,6 +148,10 @@ fn tool_is_mutating(tool_name: &str) -> bool {
     )
 }
 
+pub(crate) fn tool_inventory_policy_for_profile(profile: CapabilityProfile) -> ToolInventoryPolicy {
+    ToolInventoryPolicy::strict().with_read_only_only(!profile.allows_mutation())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +193,22 @@ mod tests {
     async fn operator_profile_allows_mutating_tools() {
         let server = server(CapabilityProfile::Operator).await;
         assert!(server.is_tool_allowed("gsc_sitemap_submit"));
+    }
+
+    #[tokio::test]
+    async fn read_only_profile_hides_mutating_tools_from_list_surface() {
+        let server = server(CapabilityProfile::ReadOnly).await;
+        let names = server.tool_names();
+        assert!(names.contains(&"gsc_search_analytics_query".to_string()));
+        assert!(!names.contains(&"gsc_sitemap_submit".to_string()));
+        assert!(!names.contains(&"gsc_site_delete".to_string()));
+    }
+
+    #[tokio::test]
+    async fn operator_profile_lists_mutating_tools() {
+        let server = server(CapabilityProfile::Operator).await;
+        let names = server.tool_names();
+        assert!(names.contains(&"gsc_sitemap_submit".to_string()));
+        assert!(names.contains(&"gsc_site_delete".to_string()));
     }
 }

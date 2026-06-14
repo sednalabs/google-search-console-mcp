@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use mcp_toolkit_core::tool_inventory::{ToolOperation, ToolSearchFilter, ToolSearchResponse};
+use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::tool;
@@ -9,10 +10,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::WRITE_SCOPE;
+use crate::config::{CapabilityProfile, WRITE_SCOPE};
 use crate::contract;
 use crate::gsc_client::SearchAnalyticsRequest;
-use crate::server::SearchConsoleMcp;
+use crate::server::{SearchConsoleMcp, tool_inventory_policy_for_profile};
+use crate::tool_surface::build_tool_inventory;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FindToolsArgs {
@@ -112,6 +114,33 @@ pub struct SitemapArgs {
     pub feed_path: String,
 }
 
+pub fn registered_tool_names(profile: CapabilityProfile) -> Vec<String> {
+    registered_tools(profile)
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect()
+}
+
+pub fn registered_tool_schema_snapshot(profile: CapabilityProfile) -> serde_json::Value {
+    tool_schema_snapshot_value(&registered_tools(profile))
+        .expect("registered tool definitions should serialize")
+}
+
+fn registered_tools(profile: CapabilityProfile) -> Vec<rmcp::model::Tool> {
+    let inventory = build_tool_inventory().expect("google-search-console-mcp inventory");
+    let policy = tool_inventory_policy_for_profile(profile);
+    inventory.filter_tools(
+        SearchConsoleMcp::tool_router_search_console().list_all(),
+        ToolOperation::List,
+        &policy,
+        |tool| tool.name.as_ref(),
+    )
+}
+
+fn redact_tool_error_message(err: &impl std::fmt::Display) -> String {
+    contract::redact_secret_text(&err.to_string())
+}
+
 #[tool_router(router = tool_router_search_console, vis = "pub")]
 impl SearchConsoleMcp {
     /// Search tools for OpenAI tool_search and deferred-loading clients.
@@ -135,7 +164,7 @@ impl SearchConsoleMcp {
             self.tool_inventory
                 .search(&filter, ToolOperation::List, &self.tool_inventory_policy);
         let schemas = if args.include_schema {
-            let tools = Self::tool_router_search_console().list_all();
+            let tools = self.visible_tools();
             let mut schema_map = serde_json::Map::new();
             for result in &results {
                 if let Some(tool) = tools.iter().find(|tool| tool.name.as_ref() == result.name) {
@@ -224,7 +253,7 @@ impl SearchConsoleMcp {
                 Err(err) => json!({
                     "checked": true,
                     "ok": false,
-                    "error": err.to_string()
+                    "error": redact_tool_error_message(&err)
                 }),
             }
         } else {
@@ -511,5 +540,38 @@ fn auth_next_steps(verified: bool, token_ok: Option<bool>) -> Vec<&'static str> 
             "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.",
             "Ensure the authenticated principal has access to the Search Console property.",
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registered_tool_print_helpers_are_metadata_only() {
+        let read_only_names = registered_tool_names(CapabilityProfile::ReadOnly);
+        assert!(!read_only_names.is_empty());
+        assert!(!read_only_names.contains(&"gsc_sitemap_submit".to_string()));
+        assert!(
+            registered_tool_names(CapabilityProfile::Operator)
+                .contains(&"gsc_sitemap_submit".to_string())
+        );
+        assert!(
+            registered_tool_schema_snapshot(CapabilityProfile::ReadOnly)
+                .as_object()
+                .map(|map| !map.is_empty())
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn redacts_auth_status_errors() {
+        let err = crate::error::SearchConsoleError::AuthBootstrap(
+            "client_secret=abc refresh_token=xyz".to_string(),
+        );
+        let redacted = redact_tool_error_message(&err);
+        assert!(!redacted.contains("abc"));
+        assert!(!redacted.contains("xyz"));
+        assert!(redacted.contains("[redacted]"));
     }
 }

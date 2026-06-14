@@ -9,6 +9,7 @@ use tracing_subscriber::EnvFilter;
 use google_search_console_mcp::config::{Cli, Settings};
 use google_search_console_mcp::gsc_client::SearchConsoleClient;
 use google_search_console_mcp::server::SearchConsoleMcp;
+use google_search_console_mcp::tools::{registered_tool_names, registered_tool_schema_snapshot};
 
 #[tokio::main]
 async fn main() {
@@ -22,21 +23,24 @@ async fn run() -> Result<()> {
     init_tracing();
 
     let settings = Settings::from_cli(Cli::parse())?;
-    let client = Arc::new(SearchConsoleClient::from_settings(&settings).await?);
-    let server = SearchConsoleMcp::new(client, settings.profile);
-
     if settings.print_tools {
-        println!("{}", serde_json::to_string_pretty(&server.tool_names())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&registered_tool_names(settings.profile))?
+        );
         return Ok(());
     }
 
     if settings.print_tool_schema {
         println!(
             "{}",
-            serde_json::to_string_pretty(&server.tool_schema_snapshot())?
+            serde_json::to_string_pretty(&registered_tool_schema_snapshot(settings.profile))?
         );
         return Ok(());
     }
+
+    let client = Arc::new(SearchConsoleClient::from_settings(&settings).await?);
+    let server = SearchConsoleMcp::new(client, settings.profile);
 
     mcp_toolkit_observability::emit_event(
         mcp_toolkit_observability::Level::INFO,

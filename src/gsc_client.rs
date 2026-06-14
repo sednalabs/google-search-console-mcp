@@ -574,6 +574,17 @@ impl SearchConsoleClient {
 }
 
 fn select_auth_mode(settings: &Settings) -> Result<UpstreamAuthMode, SearchConsoleError> {
+    let oauth_client_secret_json = settings
+        .oauth_client_secret_json
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let oauth_refresh_token = settings
+        .oauth_refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
     if let Some(raw_json) = settings
         .service_account_json
         .as_deref()
@@ -610,16 +621,14 @@ fn select_auth_mode(settings: &Settings) -> Result<UpstreamAuthMode, SearchConso
         });
     }
 
-    match (
-        settings.oauth_client_secret_json.as_deref(),
-        settings.oauth_refresh_token.as_deref(),
-    ) {
-        (Some(client_secret_path), Some(refresh_token)) => {
-            Ok(UpstreamAuthMode::OAuthRefresh(Arc::new(
-                parse_oauth_refresh_config(client_secret_path, refresh_token)?,
-            )))
-        }
-        _ => Ok(UpstreamAuthMode::Adc),
+    match (oauth_client_secret_json, oauth_refresh_token) {
+        (Some(client_secret_path), Some(refresh_token)) => Ok(UpstreamAuthMode::OAuthRefresh(
+            Arc::new(parse_oauth_refresh_config(client_secret_path, refresh_token)?),
+        )),
+        (None, None) => Ok(UpstreamAuthMode::Adc),
+        _ => Err(SearchConsoleError::AuthBootstrap(
+            "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON and GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN must both be set or both be unset; refusing to fall back to ADC with partial OAuth configuration".to_string(),
+        )),
     }
 }
 
@@ -644,7 +653,25 @@ pub fn validate_site_url(value: &str) -> Result<(), SearchConsoleError> {
         }
         return Ok(());
     }
-    validate_absolute_http_url("site_url", trimmed)
+    let parsed = Url::parse(trimmed).map_err(|err| {
+        SearchConsoleError::invalid("site_url", format!("must be an absolute URL: {err}"))
+    })?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => {
+            return Err(SearchConsoleError::invalid(
+                "site_url",
+                "must use http or https scheme",
+            ));
+        }
+    }
+    if !trimmed.ends_with('/') || !parsed.path().ends_with('/') {
+        return Err(SearchConsoleError::invalid(
+            "site_url",
+            "URL-prefix properties must include a trailing slash, for example https://www.example.com/",
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_absolute_http_url(
@@ -754,6 +781,7 @@ fn parse_oauth_refresh_config(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("https://oauth2.googleapis.com/token");
+    validate_oauth_token_uri(token_uri)?;
 
     Ok(OAuthRefreshConfig {
         token_uri: token_uri.to_string(),
@@ -768,7 +796,35 @@ fn clip_message(message: String) -> String {
     if message.len() <= MAX_LEN {
         return message;
     }
-    format!("{}...", &message[..MAX_LEN])
+    let mut end = MAX_LEN;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &message[..end])
+}
+
+fn validate_oauth_token_uri(token_uri: &str) -> Result<(), SearchConsoleError> {
+    let parsed = Url::parse(token_uri).map_err(|err| {
+        SearchConsoleError::AuthBootstrap(format!(
+            "invalid OAuth token_uri '{token_uri}' in GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON: {err}"
+        ))
+    })?;
+    if parsed.scheme() != "https" {
+        return Err(SearchConsoleError::AuthBootstrap(format!(
+            "OAuth token_uri '{token_uri}' must use https"
+        )));
+    }
+
+    let host = parsed.host_str().unwrap_or("");
+    let path = parsed.path();
+    let allowed = (host == "oauth2.googleapis.com" && path == "/token")
+        || (host == "accounts.google.com" && path == "/o/oauth2/token");
+    if !allowed {
+        return Err(SearchConsoleError::AuthBootstrap(format!(
+            "OAuth token_uri '{token_uri}' must be one of https://oauth2.googleapis.com/token or https://accounts.google.com/o/oauth2/token"
+        )));
+    }
+    Ok(())
 }
 
 fn non_empty_opt(value: Option<String>) -> Option<String> {
@@ -831,6 +887,9 @@ mod tests {
     #[test]
     fn validates_site_url_forms() {
         validate_site_url("https://www.example.com/").expect("url-prefix property");
+        validate_site_url("https://www.example.com/path/").expect("nested url-prefix property");
+        assert!(validate_site_url("https://www.example.com").is_err());
+        assert!(validate_site_url("https://www.example.com/path").is_err());
         validate_site_url("sc-domain:example.com").expect("domain property");
         assert!(validate_site_url("").is_err());
         assert!(validate_site_url("sc-domain:bad/path").is_err());
@@ -840,5 +899,93 @@ mod tests {
     fn validates_iso_dates_by_shape() {
         validate_iso_date("start_date", "2026-06-14").expect("date shape");
         assert!(validate_iso_date("start_date", "14-06-2026").is_err());
+    }
+
+    #[test]
+    fn rejects_partial_oauth_configuration() {
+        let base = test_settings();
+
+        let mut with_secret_only = base.clone();
+        with_secret_only.oauth_client_secret_json = Some("/tmp/client.json".to_string());
+        with_secret_only.oauth_refresh_token = None;
+        match select_auth_mode(&with_secret_only) {
+            Err(SearchConsoleError::AuthBootstrap(message)) => {
+                assert!(message.contains("must both be set or both be unset"))
+            }
+            Ok(_) => panic!("unexpected auth mode result: Ok"),
+            Err(err) => panic!("unexpected auth mode result: {err}"),
+        }
+
+        let mut with_token_only = base;
+        with_token_only.oauth_client_secret_json = None;
+        with_token_only.oauth_refresh_token = Some("refresh-token".to_string());
+        match select_auth_mode(&with_token_only) {
+            Err(SearchConsoleError::AuthBootstrap(message)) => {
+                assert!(message.contains("must both be set or both be unset"))
+            }
+            Ok(_) => panic!("unexpected auth mode result: Ok"),
+            Err(err) => panic!("unexpected auth mode result: {err}"),
+        }
+    }
+
+    #[test]
+    fn rejects_non_google_oauth_token_uri() {
+        let client_secret = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(
+            client_secret.path(),
+            r#"{"installed":{"client_id":"client","client_secret":"secret","token_uri":"http://evil.test/token"}}"#,
+        )
+        .expect("write secret json");
+        let err = parse_oauth_refresh_config(
+            client_secret.path().to_str().expect("utf-8 path"),
+            "refresh-token",
+        )
+        .expect_err("invalid token uri");
+        assert!(
+            matches!(err, SearchConsoleError::AuthBootstrap(message) if message.contains("must use https"))
+        );
+
+        let client_secret = tempfile::NamedTempFile::new().expect("temp file");
+        std::fs::write(
+            client_secret.path(),
+            r#"{"installed":{"client_id":"client","client_secret":"secret","token_uri":"https://evil.test/token"}}"#,
+        )
+        .expect("write secret json");
+        let err = parse_oauth_refresh_config(
+            client_secret.path().to_str().expect("utf-8 path"),
+            "refresh-token",
+        )
+        .expect_err("invalid token uri");
+        assert!(
+            matches!(err, SearchConsoleError::AuthBootstrap(message) if message.contains("must be one of"))
+        );
+    }
+
+    #[test]
+    fn clips_multibyte_messages_without_panicking() {
+        let message = format!("{}a", "é".repeat(512));
+        let clipped = clip_message(message);
+        assert!(clipped.ends_with("..."));
+        assert!(clipped.len() <= 1_027);
+        assert!(clipped.chars().all(|ch| ch == 'é' || ch == '.'));
+    }
+
+    fn test_settings() -> Settings {
+        Settings {
+            profile: crate::config::CapabilityProfile::ReadOnly,
+            scope: "https://www.googleapis.com/auth/webmasters.readonly".to_string(),
+            api_base_url: "https://www.googleapis.com/webmasters/v3".to_string(),
+            inspection_base_url: "https://searchconsole.googleapis.com/v1".to_string(),
+            http_timeout: Duration::from_secs(15),
+            user_agent: "test-agent".to_string(),
+            oauth_client_secret_json: None,
+            oauth_refresh_token: None,
+            service_account_json_path: None,
+            service_account_json: None,
+            quota_project: None,
+            max_row_limit: 25_000,
+            print_tools: false,
+            print_tool_schema: false,
+        }
     }
 }

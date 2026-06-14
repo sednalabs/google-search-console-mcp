@@ -28,5 +28,15 @@ jobs:
       - name: Print tool inventory
         run: |
           set -euo pipefail
-          cargo run -- --print-tools > /tmp/tools.json
-          test -s /tmp/tools.json
+          cargo run -- --print-tools \
+            | jq -e 'length > 0 and (index("gsc_sitemap_submit") | not)' >/dev/null
+          cargo run -- --profile operator --print-tools \
+            | jq -e 'index("gsc_sitemap_submit") != null' >/dev/null
+
+      - name: Print tool schema
+        run: |
+          set -euo pipefail
+          cargo run -- --print-tool-schema \
+            | jq -e '.tools | length > 0 and (map(.name) | index("gsc_sitemap_submit") | not)' >/dev/null
+          cargo run -- --profile operator --print-tool-schema \
+            | jq -e '.tools | map(.name) | index("gsc_sitemap_submit") != null' >/dev/null
