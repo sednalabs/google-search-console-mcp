@@ -11,8 +11,8 @@ readme = "README.md"
 anyhow = "1.0.102"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 gcp_auth = "0.12.6"
-mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "acbf399947d31a2a7098eaa012c033d779f6fb7f", package = "mcp-toolkit-core" }
-mcp-toolkit-observability = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "acbf399947d31a2a7098eaa012c033d779f6fb7f", package = "mcp-toolkit-observability", features = ["tracing-bridge"] }
+mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "4aeb6b6a3d07a4ba1b336dba4305138a6a1554dc", package = "mcp-toolkit-core" }
+mcp-toolkit-observability = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "4aeb6b6a3d07a4ba1b336dba4305138a6a1554dc", package = "mcp-toolkit-observability", features = ["tracing-bridge"] }
 percent-encoding = "2.3.2"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "http2", "rustls-tls"] }
 rmcp = { version = "=1.7.0", features = ["server", "macros", "schemars", "transport-io"] }

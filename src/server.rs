@@ -67,11 +67,8 @@ impl SearchConsoleMcp {
     }
 
     fn is_tool_allowed(&self, tool_name: &str) -> bool {
-        if tool_is_mutating(tool_name) {
-            self.profile.allows_mutation()
-        } else {
-            true
-        }
+        self.tool_inventory
+            .is_allowed(tool_name, ToolOperation::Call, &self.tool_inventory_policy)
     }
 }
 
@@ -109,12 +106,7 @@ impl ServerHandler for SearchConsoleMcp {
         let tool_name = request.name.to_string();
         let tool_context = ToolCallContext::new(self, request, context);
         async move {
-            let registered_allowed = self.tool_inventory.is_allowed(
-                &tool_name,
-                ToolOperation::Call,
-                &self.tool_inventory_policy,
-            );
-            if !registered_allowed || !self.is_tool_allowed(&tool_name) {
+            if !self.is_tool_allowed(&tool_name) {
                 let err =
                     SearchConsoleError::policy_denied(self.profile.as_str(), tool_name.clone());
                 return Ok(contract::error(err, std::time::Instant::now()));
@@ -141,15 +133,12 @@ impl ServerHandler for SearchConsoleMcp {
     }
 }
 
-fn tool_is_mutating(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "gsc_sitemap_submit" | "gsc_sitemap_delete" | "gsc_site_add" | "gsc_site_delete"
-    )
-}
-
 pub(crate) fn tool_inventory_policy_for_profile(profile: CapabilityProfile) -> ToolInventoryPolicy {
-    ToolInventoryPolicy::strict().with_read_only_only(!profile.allows_mutation())
+    if profile.allows_mutation() {
+        ToolInventoryPolicy::strict()
+    } else {
+        ToolInventoryPolicy::strict_read_only()
+    }
 }
 
 #[cfg(test)]

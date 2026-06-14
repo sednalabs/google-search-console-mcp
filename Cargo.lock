@@ -878,7 +878,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-core"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=acbf399947d31a2a7098eaa012c033d779f6fb7f#acbf399947d31a2a7098eaa012c033d779f6fb7f"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=4aeb6b6a3d07a4ba1b336dba4305138a6a1554dc#4aeb6b6a3d07a4ba1b336dba4305138a6a1554dc"
 dependencies = [
  "rmcp",
  "serde",
@@ -888,7 +888,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-observability"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=acbf399947d31a2a7098eaa012c033d779f6fb7f#acbf399947d31a2a7098eaa012c033d779f6fb7f"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=4aeb6b6a3d07a4ba1b336dba4305138a6a1554dc#4aeb6b6a3d07a4ba1b336dba4305138a6a1554dc"
 dependencies = [
  "once_cell",
  "regex",
