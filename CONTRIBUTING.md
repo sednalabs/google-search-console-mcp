@@ -15,7 +15,11 @@ Before opening a pull request, run:
 ```bash
 cargo fmt --check
 cargo test
-cargo run -- --print-tools
+cargo clippy --all-targets -- -D warnings
+cargo run -- --print-tools | jq -e 'index("gsc_sitemap_submit") | not'
+cargo run -- --profile operator --print-tools | jq -e 'index("gsc_sitemap_submit") != null'
+cargo run -- --print-tool-schema | jq -e '.tools | map(.name) | index("gsc_sitemap_submit") | not'
+cargo run -- --profile operator --print-tool-schema | jq -e '.tools | map(.name) | index("gsc_sitemap_submit") != null'
 ```
 
 Use hosted GitHub validation as the shared proof surface for public changes whenever available.
