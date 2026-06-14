@@ -1,0 +1,29 @@
+[package]
+name = "google-search-console-mcp"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Lightweight Rust MCP server for Google Search Console."
+repository = "https://github.com/sednalabs/google-search-console-mcp"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.5.60", features = ["derive", "env"] }
+gcp_auth = "0.12.6"
+mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "acbf399947d31a2a7098eaa012c033d779f6fb7f", package = "mcp-toolkit-core" }
+mcp-toolkit-observability = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "acbf399947d31a2a7098eaa012c033d779f6fb7f", package = "mcp-toolkit-observability", features = ["tracing-bridge"] }
+percent-encoding = "2.3.2"
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "http2", "rustls-tls"] }
+rmcp = { version = "=1.7.0", features = ["server", "macros", "schemars", "transport-io"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "time"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+url = "2.5.7"
+
+[dev-dependencies]
+tempfile = "3.25.0"

@@ -1,0 +1,41 @@
+# Tool Guide
+
+## Setup Tools
+
+Use `gsc_get_started` immediately after install. It returns the recommended auth flow, safe
+starter tools, and credential options without making an upstream Google request.
+
+Use `gsc_auth_status` to inspect auth configuration. Set `verify_token=true` when you want to prove
+token acquisition; the tool never returns the token.
+
+Use `gsc_auth_login_command` for a copyable Application Default Credentials command. Set
+`write_scope=true` only when preparing to run operator tools.
+
+## Read Tools
+
+Use `gsc_sites_list` first to discover exact Search Console property strings. URL-prefix properties
+must preserve the trailing slash. Domain properties use `sc-domain:example.com`.
+
+Use `gsc_search_analytics_query` for performance rows. The request supports the official Search
+Analytics dimensions and filter group structure. `row_limit` is validated against the documented
+maximum of 25,000 rows.
+
+Use `gsc_url_inspection_index_inspect` for the Google-indexed status of a URL. The Google API does
+not provide live indexability testing through this method.
+
+Use `gsc_sitemaps_list` and `gsc_sitemap_get` to inspect submitted sitemap metadata.
+
+## Operator Tools
+
+The following tools are blocked unless `GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator`:
+
+- `gsc_sitemap_submit`
+- `gsc_sitemap_delete`
+- `gsc_site_add`
+- `gsc_site_delete`
+
+Operator tools also require Google credentials with the write scope:
+
+```text
+https://www.googleapis.com/auth/webmasters
+```
