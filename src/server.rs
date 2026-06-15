@@ -162,6 +162,7 @@ mod tests {
             max_row_limit: 25_000,
             print_tools: false,
             print_tool_schema: false,
+            command: None,
         };
         let client = Arc::new(
             SearchConsoleClient::from_settings(&settings)

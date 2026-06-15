@@ -6,7 +6,9 @@ use rmcp::serve_server;
 use rmcp::transport::stdio;
 use tracing_subscriber::EnvFilter;
 
+use google_search_console_mcp::auth_ux::run_auth_command;
 use google_search_console_mcp::config::{Cli, Settings};
+use google_search_console_mcp::config::{CliCommand, WRITE_SCOPE, scope_allows_mutation};
 use google_search_console_mcp::gsc_client::SearchConsoleClient;
 use google_search_console_mcp::server::SearchConsoleMcp;
 use google_search_console_mcp::tools::{registered_tool_names, registered_tool_schema_snapshot};
@@ -23,6 +25,16 @@ async fn run() -> Result<()> {
     init_tracing();
 
     let settings = Settings::from_cli(Cli::parse())?;
+    if let Some(command) = settings.command.clone() {
+        match command {
+            CliCommand::Serve => {}
+            CliCommand::Auth(auth) => {
+                run_auth_command(&settings, &auth.command).await?;
+                return Ok(());
+            }
+        }
+    }
+
     if settings.print_tools {
         println!(
             "{}",
@@ -37,6 +49,12 @@ async fn run() -> Result<()> {
             serde_json::to_string_pretty(&registered_tool_schema_snapshot(settings.profile))?
         );
         return Ok(());
+    }
+
+    if settings.profile.allows_mutation() && !scope_allows_mutation(&settings.scope) {
+        eprintln!(
+            "warning: operator profile is enabled but the configured scope does not include the write scope; run `google-search-console-mcp auth login --write-scope` and set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={WRITE_SCOPE} before using mutation tools"
+        );
     }
 
     let client = Arc::new(SearchConsoleClient::from_settings(&settings).await?);

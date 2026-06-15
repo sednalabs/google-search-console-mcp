@@ -10,9 +10,14 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::config::{CapabilityProfile, WRITE_SCOPE};
+use crate::auth_ux::{
+    auth_login_cli_command, local_credential_material_detected, login_command_for_scope,
+};
+use crate::config::{
+    CapabilityProfile, DEFAULT_SCOPE, WRITE_SCOPE, scope_allows_mutation, scope_allows_read,
+};
 use crate::contract;
-use crate::gsc_client::SearchAnalyticsRequest;
+use crate::gsc_client::{AuthSource, SearchAnalyticsRequest};
 use crate::server::{SearchConsoleMcp, tool_inventory_policy_for_profile};
 use crate::tool_surface::build_tool_inventory;
 
@@ -53,6 +58,12 @@ pub struct AuthLoginCommandArgs {
     /// Use the write-capable Search Console scope needed for operator sitemap/site mutations.
     #[serde(default)]
     pub write_scope: bool,
+    /// Include the headless browser flag for SSH or remote environments.
+    #[serde(default)]
+    pub headless: bool,
+    /// Optional Google OAuth client id file for gcloud ADC login.
+    #[serde(default)]
+    pub client_id_file: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -194,19 +205,30 @@ impl SearchConsoleMcp {
             json!({
                 "server": "google-search-console-mcp",
                 "profile": self.profile.as_str(),
-                "auth_source": self.client.auth_source().as_str(),
+                "auth_source_candidate": self.client.auth_source().as_str(),
+                "auth_source_note": "A candidate auth source is not proof credentials exist; call gsc_auth_status or auth status --verify-token.",
                 "scope": self.client.scope(),
+                "recommended_cli": {
+                    "login": "google-search-console-mcp auth login",
+                    "login_with_client_id_file": "google-search-console-mcp auth login --client-id-file /path/to/client_id.json",
+                    "status": "google-search-console-mcp auth status --verify-token",
+                    "doctor": "google-search-console-mcp auth doctor --verify-token"
+                },
                 "first_steps": [
-                    "Call gsc_auth_status with verify_token=false to inspect configuration without making a token request.",
-                    "If no credentials are configured, call gsc_auth_login_command and run the returned gcloud command.",
-                    "Call gsc_auth_status with verify_token=true to prove Google auth without returning a token.",
+                    "Before starting a long-lived MCP client, run google-search-console-mcp auth login for the easiest browser login.",
+                    "If Google rejects the Search Console scope, create a Desktop OAuth client and rerun google-search-console-mcp auth login --client-id-file /path/to/client_id.json.",
+                    "If you are already inside MCP, call gsc_auth_status with verify_token=false to inspect configuration without making a token request.",
+                    "If credentials are missing, call gsc_auth_login_command and run the returned gcloud command.",
+                    "Call google-search-console-mcp auth status --verify-token or gsc_auth_status with verify_token=true to prove Google auth without returning a token.",
                     "Call gsc_sites_list to discover the exact Search Console property string.",
                     "Use the exact siteUrl from gsc_sites_list when querying analytics, URL inspection, or sitemaps."
                 ],
                 "credential_options": [
                     {
                         "name": "Application Default Credentials",
-                        "best_for": "lowest-friction local use",
+                        "best_for": "lowest-friction local browser login",
+                        "command": "google-search-console-mcp auth login",
+                        "client_id_file_command": "google-search-console-mcp auth login --client-id-file /path/to/client_id.json",
                         "env": []
                     },
                     {
@@ -260,17 +282,34 @@ impl SearchConsoleMcp {
             json!({ "checked": false })
         };
         let token_ok = token_check.get("ok").and_then(Value::as_bool);
+        let auth_source_candidate = self.client.auth_source();
+        let credential_material_detected = credential_material_detected_for_auth_source(
+            auth_source_candidate,
+            local_credential_material_detected(),
+        );
+        let auth_source = if matches!(
+            auth_source_candidate,
+            AuthSource::GoogleDefaultProviderChain
+        ) && !credential_material_detected
+            && token_ok != Some(true)
+        {
+            Value::Null
+        } else {
+            json!(auth_source_candidate.as_str())
+        };
 
         Ok(contract::success(
             json!({
-                "auth_source": self.client.auth_source().as_str(),
+                "auth_source": auth_source,
+                "auth_source_candidate": auth_source_candidate.as_str(),
                 "scope": self.client.scope(),
                 "profile": self.profile.as_str(),
                 "operator_tools_enabled": self.profile.allows_mutation(),
                 "quota_project_configured": self.client.quota_project_configured(),
+                "credential_material_detected": credential_material_detected,
                 "detected_env": auth_env_presence(),
                 "token_check": token_check,
-                "next_steps": auth_next_steps(args.verify_token, token_ok),
+                "next_steps": auth_next_steps(self.profile, self.client.scope(), args.verify_token, token_ok),
                 "secrets_returned": false
             }),
             started,
@@ -287,17 +326,37 @@ impl SearchConsoleMcp {
         Parameters(args): Parameters<AuthLoginCommandArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
-        let scope = if args.write_scope {
-            WRITE_SCOPE
-        } else {
-            self.client.scope()
-        };
+        let scope = login_scope_for_mcp_command(self.client.scope(), args.write_scope);
+        let command = login_command_for_scope(
+            scope,
+            args.headless,
+            args.client_id_file.as_deref().map(std::path::Path::new),
+        );
+        let preferred_cli = auth_login_cli_command(
+            scope,
+            args.write_scope,
+            args.headless,
+            args.client_id_file.as_deref().map(std::path::Path::new),
+        );
+        let after_login = after_login_instruction(args.write_scope, self.client.scope(), scope);
         Ok(contract::success(
             json!({
-                "command": format!("gcloud auth application-default login --scopes={scope}"),
+                "command": command,
+                "preferred_cli": preferred_cli,
                 "scope": scope,
                 "write_scope": args.write_scope,
-                "after_login": "Restart stdio MCP clients that keep long-lived server processes, then call gsc_auth_status with verify_token=true.",
+                "headless": args.headless,
+                "client_id_file": args.client_id_file,
+                "after_login": after_login,
+                "client_id_file_hint": "Search Console scopes may require a Google OAuth client id file; pass client_id_file when Google rejects the requested scope.",
+                "operator_env": if args.write_scope {
+                    json!({
+                        "GOOGLE_SEARCH_CONSOLE_MCP_PROFILE": "operator",
+                        "GOOGLE_SEARCH_CONSOLE_MCP_SCOPE": WRITE_SCOPE
+                    })
+                } else {
+                    Value::Null
+                },
                 "service_account_alternative": {
                     "standard_env": "GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json",
                     "server_specific_path_env": "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH=/path/to/service-account.json"
@@ -524,22 +583,135 @@ fn auth_env_presence() -> Value {
     })
 }
 
-fn auth_next_steps(verified: bool, token_ok: Option<bool>) -> Vec<&'static str> {
+fn credential_material_detected_for_auth_source(
+    auth_source: AuthSource,
+    local_detected: bool,
+) -> bool {
+    local_detected || !matches!(auth_source, AuthSource::GoogleDefaultProviderChain)
+}
+
+fn login_scope_for_mcp_command(current_scope: &str, write_scope: bool) -> &str {
+    if write_scope {
+        WRITE_SCOPE
+    } else if scope_allows_read(current_scope) && !scope_allows_mutation(current_scope) {
+        current_scope
+    } else {
+        DEFAULT_SCOPE
+    }
+}
+
+fn after_login_instruction(write_scope: bool, current_scope: &str, login_scope: &str) -> String {
+    let ambient_scope = std::env::var("GOOGLE_SEARCH_CONSOLE_MCP_SCOPE").ok();
+    after_login_instruction_with_env(
+        write_scope,
+        current_scope,
+        login_scope,
+        ambient_scope.as_deref(),
+    )
+}
+
+fn after_login_instruction_with_env(
+    write_scope: bool,
+    current_scope: &str,
+    login_scope: &str,
+    ambient_scope: Option<&str>,
+) -> String {
+    if write_scope {
+        "Set GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator and GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters, or start the MCP server with `--profile operator --scope https://www.googleapis.com/auth/webmasters`, before using mutation tools; then restart stdio MCP clients and verify auth.".to_string()
+    } else if current_scope != login_scope
+        || ambient_scope
+            .filter(|scope| !scope.is_empty())
+            .is_some_and(|scope| scope != login_scope)
+    {
+        format!(
+            "Unset GOOGLE_SEARCH_CONSOLE_MCP_SCOPE, set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={login_scope}, or update any MCP launcher `--scope` argument before restarting stdio MCP clients; stale scope configuration overrides the login scope."
+        )
+    } else {
+        "Restart stdio MCP clients that keep long-lived server processes, then call gsc_auth_status with verify_token=true or run google-search-console-mcp auth status --verify-token.".to_string()
+    }
+}
+
+fn auth_next_steps(
+    profile: CapabilityProfile,
+    scope: &str,
+    verified: bool,
+    token_ok: Option<bool>,
+) -> Vec<String> {
+    let operator_missing_write_scope = profile.allows_mutation() && !scope_allows_mutation(scope);
+    let missing_search_console_scope = !scope_allows_read(scope);
+    let read_scope_step = format!(
+        "Set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={DEFAULT_SCOPE} or start the MCP server with `--scope {DEFAULT_SCOPE}` for read-only tools; use {WRITE_SCOPE} or `--scope {WRITE_SCOPE}` for operator tools."
+    );
+    let login_command = if operator_missing_write_scope {
+        "google-search-console-mcp auth login --write-scope"
+    } else if missing_search_console_scope {
+        "google-search-console-mcp auth login --scope https://www.googleapis.com/auth/webmasters.readonly"
+    } else {
+        "google-search-console-mcp auth login"
+    };
     match (verified, token_ok) {
-        (false, _) => vec![
-            "Run gsc_auth_status with verify_token=true when you are ready to prove credentials.",
-            "If credentials are missing, call gsc_auth_login_command for the local ADC command.",
-            "Call gsc_sites_list after auth is verified to discover exact property strings.",
-        ],
-        (true, Some(true)) => vec![
-            "Call gsc_sites_list to discover exact property strings.",
-            "Use gsc_search_analytics_query for Search Console performance data.",
-        ],
-        (true, Some(false)) | (true, None) => vec![
-            "Call gsc_auth_login_command and run the returned command for local ADC.",
-            "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.",
-            "Ensure the authenticated principal has access to the Search Console property.",
-        ],
+        (false, _) => {
+            let mut steps = Vec::new();
+            if missing_search_console_scope {
+                steps.push(read_scope_step.clone());
+            }
+            if operator_missing_write_scope {
+                steps.push(format!(
+                    "Set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={WRITE_SCOPE} or start the MCP server with `--scope {WRITE_SCOPE}` before using operator mode."
+                ));
+            }
+            steps.push("Run google-search-console-mcp auth status --verify-token, or call gsc_auth_status with verify_token=true, when you are ready to prove credentials.".to_string());
+            steps.push(format!(
+                "If credentials are missing, run {login_command} or call gsc_auth_login_command for the gcloud command."
+            ));
+            steps.push(
+                "Call gsc_sites_list after auth is verified to discover exact property strings."
+                    .to_string(),
+            );
+            steps
+        }
+        (true, Some(true)) => {
+            let mut steps = Vec::new();
+            if missing_search_console_scope {
+                steps.push(read_scope_step);
+            }
+            if operator_missing_write_scope {
+                steps.push(format!(
+                    "Set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={WRITE_SCOPE} or start the MCP server with `--scope {WRITE_SCOPE}` before using operator tools."
+                ));
+            }
+            steps.push(
+                "Restart MCP clients that keep long-lived stdio server processes.".to_string(),
+            );
+            steps.push("Call gsc_sites_list to discover exact property strings.".to_string());
+            steps.push(
+                "Use gsc_search_analytics_query for Search Console performance data.".to_string(),
+            );
+            steps
+        }
+        (true, Some(false)) | (true, None) => {
+            let mut steps = vec![
+                format!("Run {login_command} for local browser login."),
+                "Call gsc_auth_login_command if you need a copyable gcloud command inside MCP."
+                    .to_string(),
+                "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.".to_string(),
+                "If server-specific credential env vars are malformed, fix or clear them before browser login because they override Application Default Credentials.".to_string(),
+                "Ensure the authenticated principal has access to the Search Console property."
+                    .to_string(),
+            ];
+            if missing_search_console_scope {
+                steps.insert(0, read_scope_step);
+            }
+            if operator_missing_write_scope {
+                steps.insert(
+                    1,
+                    format!(
+                        "Set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={WRITE_SCOPE} or start the MCP server with `--scope {WRITE_SCOPE}` before using operator mode."
+                    ),
+                );
+            }
+            steps
+        }
     }
 }
 
@@ -573,5 +745,111 @@ mod tests {
         assert!(!redacted.contains("abc"));
         assert!(!redacted.contains("xyz"));
         assert!(redacted.contains("[redacted]"));
+    }
+
+    #[test]
+    fn auth_status_next_steps_use_write_scope_for_operator_default_scope() {
+        let steps = auth_next_steps(
+            CapabilityProfile::Operator,
+            "https://www.googleapis.com/auth/drive",
+            false,
+            None,
+        );
+
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("auth login --write-scope"))
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("GOOGLE_SEARCH_CONSOLE_MCP_SCOPE"))
+        );
+    }
+
+    #[test]
+    fn auth_status_next_steps_require_search_console_scope() {
+        let steps = auth_next_steps(
+            CapabilityProfile::ReadOnly,
+            "https://www.googleapis.com/auth/drive",
+            true,
+            Some(true),
+        );
+
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("GOOGLE_SEARCH_CONSOLE_MCP_SCOPE"))
+        );
+    }
+
+    #[test]
+    fn mcp_login_command_scope_repairs_bad_read_only_scope() {
+        assert_eq!(
+            login_scope_for_mcp_command("https://www.googleapis.com/auth/drive", false),
+            DEFAULT_SCOPE
+        );
+        assert_eq!(
+            login_scope_for_mcp_command(WRITE_SCOPE, false),
+            DEFAULT_SCOPE
+        );
+        assert_eq!(
+            login_scope_for_mcp_command("https://www.googleapis.com/auth/drive", true),
+            WRITE_SCOPE
+        );
+    }
+
+    #[test]
+    fn mcp_status_counts_selected_non_adc_auth_as_credential_material() {
+        assert!(!credential_material_detected_for_auth_source(
+            AuthSource::GoogleDefaultProviderChain,
+            false
+        ));
+        assert!(credential_material_detected_for_auth_source(
+            AuthSource::GoogleDefaultProviderChain,
+            true
+        ));
+        assert!(credential_material_detected_for_auth_source(
+            AuthSource::ServiceAccountJsonPath,
+            false
+        ));
+        assert!(credential_material_detected_for_auth_source(
+            AuthSource::ServiceAccountJsonEnv,
+            false
+        ));
+        assert!(credential_material_detected_for_auth_source(
+            AuthSource::OAuthRefreshToken,
+            false
+        ));
+    }
+
+    #[test]
+    fn mcp_after_login_calls_out_repaired_runtime_scope() {
+        let instruction = after_login_instruction_with_env(
+            false,
+            "https://www.googleapis.com/auth/drive",
+            DEFAULT_SCOPE,
+            None,
+        );
+
+        assert!(instruction.contains("GOOGLE_SEARCH_CONSOLE_MCP_SCOPE"));
+        assert!(instruction.contains(DEFAULT_SCOPE));
+        assert!(instruction.contains("--scope"));
+    }
+
+    #[test]
+    fn mcp_after_login_calls_out_stale_env_for_explicit_scope() {
+        let custom_scope = "https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email";
+        let instruction = after_login_instruction_with_env(
+            false,
+            custom_scope,
+            custom_scope,
+            Some("https://www.googleapis.com/auth/drive"),
+        );
+
+        assert!(instruction.contains("GOOGLE_SEARCH_CONSOLE_MCP_SCOPE"));
+        assert!(instruction.contains(custom_scope));
+        assert!(instruction.contains("--scope"));
     }
 }

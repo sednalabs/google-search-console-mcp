@@ -191,7 +191,7 @@ impl SearchConsoleClient {
     }
 
     pub async fn verify_token(&self) -> Result<(), SearchConsoleError> {
-        self.access_token().await.map(|_| ())
+        self.list_sites().await.map(|_| ())
     }
 
     pub async fn get_site(&self, site_url: &str) -> Result<Value, SearchConsoleError> {
@@ -986,6 +986,7 @@ mod tests {
             max_row_limit: 25_000,
             print_tools: false,
             print_tool_schema: false,
+            command: None,
         }
     }
 }

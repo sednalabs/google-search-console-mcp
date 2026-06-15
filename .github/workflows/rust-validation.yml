@@ -28,6 +28,36 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Auth CLI smoke
+        run: |
+          set -euo pipefail
+          readonly_command="$(cargo run --quiet -- auth command)"
+          test "$readonly_command" = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly"
+          bad_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/drive cargo run --quiet -- auth command)"
+          test "$bad_scope_command" = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly"
+          bad_scope_login="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/drive cargo run --quiet -- auth login --dry-run)"
+          test "$bad_scope_login" = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly"
+          ambient_write_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters cargo run --quiet -- auth command)"
+          test "$ambient_write_command" = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly"
+          custom_scope="https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email"
+          env_custom_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" cargo run --quiet -- auth command)"
+          test "$env_custom_scope_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email'"
+          explicit_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" cargo run --quiet -- auth command --scope "$custom_scope")"
+          test "$explicit_scope_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email'"
+          if cargo run --quiet -- auth command --write-scope --scope "$custom_scope" >/tmp/gsc-auth-command.out 2>/tmp/gsc-auth-command.err; then
+            echo "expected --write-scope plus explicit --scope to fail" >&2
+            exit 1
+          fi
+          grep -F -- "--write-scope" /tmp/gsc-auth-command.err >/dev/null
+          write_command="$(cargo run --quiet -- auth command --write-scope)"
+          test "$write_command" = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters"
+          client_command="$(cargo run --quiet -- auth command --client-id-file /tmp/client_id.json)"
+          test "$client_command" = "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly --client-id-file /tmp/client_id.json"
+          cargo run --quiet -- auth status --json \
+            | jq -e '.server == "google-search-console-mcp" and .verification.status == "not_checked" and .ready == false and .config_valid == false' >/dev/null
+          cargo run --quiet -- auth status --service-account-json-path /tmp/does-not-exist-google-search-console-mcp.json --json \
+            | jq -e '.verification.status == "config_error" and .credential_material_detected == false and .config_valid == false' >/dev/null
+
       - name: Print tool inventory
         run: |
           set -euo pipefail

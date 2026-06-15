@@ -2,14 +2,35 @@
 
 ## Setup Tools
 
-Use `gsc_get_started` immediately after install. It returns the recommended auth flow, safe
-starter tools, and credential options without making an upstream Google request.
+For humans at a shell, prefer the CLI auth flow before starting an MCP client:
+
+```bash
+google-search-console-mcp auth login
+google-search-console-mcp auth status --verify-token
+```
+
+Search Console scopes may require a Google OAuth client id file. If Google rejects the scope,
+create a Desktop OAuth client and rerun
+`google-search-console-mcp auth login --client-id-file /path/to/client_id.json`.
+
+Use `google-search-console-mcp auth doctor` when credentials are not working. It reports the
+selected credential source, whether `gcloud` is available, whether the ADC file exists, and the
+next safest action without printing tokens or credential file contents.
+
+Inside MCP, use `gsc_get_started` immediately after install. It returns the recommended CLI auth
+flow, safe starter tools, and credential options without making an upstream Google request.
 
 Use `gsc_auth_status` to inspect auth configuration. Set `verify_token=true` when you want to prove
 token acquisition; the tool never returns the token.
 
-Use `gsc_auth_login_command` for a copyable Application Default Credentials command. Set
-`write_scope=true` only when preparing to run operator tools.
+Use `gsc_auth_login_command` only when the user needs a copyable `gcloud` Application Default
+Credentials command inside MCP. Set `write_scope=true` only when preparing to run operator tools;
+set `headless=true` for SSH or remote hosts where a browser cannot launch locally. Operator tools
+also need the server started with `GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator` and
+`GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters`, or with
+`--profile operator --scope https://www.googleapis.com/auth/webmasters` in the MCP launcher. Set
+`client_id_file` when Google requires or the user needs a project-specific Google OAuth client id
+file.
 
 ## Read Tools
 
@@ -39,3 +60,10 @@ Operator tools also require Google credentials with the write scope:
 ```text
 https://www.googleapis.com/auth/webmasters
 ```
+
+For local browser auth, run `google-search-console-mcp auth login --write-scope`, then start the
+server with `GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator` and
+`GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters`, or configure the MCP
+launcher command with `--profile operator --scope https://www.googleapis.com/auth/webmasters`.
+For SSH or browser-forwarded hosts, add `--headless`; for a project-specific OAuth client, add
+`--client-id-file /path/to/client_id.json`.

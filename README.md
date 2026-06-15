@@ -24,16 +24,69 @@ For local development:
 cargo run -- --print-tools
 ```
 
-## First Run
+## Easy Login
 
-The server exposes setup tools that do not return secrets:
+For local use, run the browser login helper once. Search Console scopes may require a Google
+OAuth client id file; if Google rejects the requested scope, create a Desktop OAuth client and
+pass it with `--client-id-file`.
+
+```bash
+google-search-console-mcp auth login
+# or, when Google requires an app-specific OAuth client:
+google-search-console-mcp auth login --client-id-file /path/to/client_id.json
+```
+
+Then verify credentials without printing tokens:
+
+```bash
+google-search-console-mcp auth status --verify-token
+```
+
+After login, restart any MCP client that keeps long-lived stdio server processes and call
+`gsc_sites_list` to discover the exact Search Console property strings.
+
+Useful auth commands:
+
+```bash
+# Show local auth state and suggested fixes.
+google-search-console-mcp auth doctor
+
+# SSH or remote hosts where the browser cannot launch locally.
+google-search-console-mcp auth login --headless
+
+# Use a project-specific Google OAuth client id file when needed.
+google-search-console-mcp auth login --client-id-file /path/to/client_id.json
+
+# Prepare for operator-only sitemap/site mutation tools.
+google-search-console-mcp auth login --write-scope
+export GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator
+export GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters
+# Or put the same runtime state in your MCP launcher command:
+# google-search-console-mcp --profile operator --scope https://www.googleapis.com/auth/webmasters
+
+# Print the underlying gcloud command without running it.
+google-search-console-mcp auth command
+```
+
+No command starts the stdio MCP server, preserving the normal MCP client launch path:
+
+```bash
+google-search-console-mcp
+```
+
+## MCP First Run
+
+The server also exposes setup tools that do not return secrets:
 
 - `gsc_get_started` shows the recommended first-run flow.
 - `gsc_auth_status` reports credential source and can optionally verify token acquisition.
-- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command.
+- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command
+  for clients that need setup help inside MCP.
 - `gsc_sites_list` discovers exact Search Console property strings after auth works.
 
-For local use, the lowest-friction path is usually:
+The CLI helper and setup tool both use the same low-friction Application Default Credentials
+model. For Search Console scopes, prefer adding `--client-id-file /path/to/client_id.json` when
+Google requires a project-specific OAuth client:
 
 ```bash
 gcloud auth application-default login \
@@ -52,16 +105,16 @@ the read-only Search Console scope:
 https://www.googleapis.com/auth/webmasters.readonly
 ```
 
-Supported credential sources:
+Supported credential sources, in the order selected by the server:
 
-- Application Default Credentials from `gcloud auth application-default login`.
-- Standard service-account file via `GOOGLE_APPLICATION_CREDENTIALS`.
+- Server-specific raw service-account JSON via `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON`.
 - Server-specific service-account file via
   `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH`.
-- Server-specific raw service-account JSON via `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON`.
 - OAuth refresh-token auth via
   `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON` and
   `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN`.
+- Application Default Credentials from `google-search-console-mcp auth login` or
+  `gcloud auth application-default login`.
 
 For operator-only sitemap/site mutations, use credentials that have:
 
@@ -77,16 +130,34 @@ responses.
 For read-only use:
 
 ```bash
+google-search-console-mcp auth login
+```
+
+Equivalent underlying command:
+
+```bash
 gcloud auth application-default login \
   --scopes=https://www.googleapis.com/auth/webmasters.readonly
+```
+
+With a project-specific OAuth client:
+
+```bash
+google-search-console-mcp auth login --client-id-file /path/to/client_id.json
 ```
 
 For operator use:
 
 ```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters
+google-search-console-mcp auth login --write-scope
+export GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator
+export GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters
+# Or configure the MCP launcher command with:
+# google-search-console-mcp --profile operator --scope https://www.googleapis.com/auth/webmasters
 ```
+
+For SSH or browser-forwarded hosts, add `--headless`. To use a project-specific OAuth client,
+pass `--client-id-file /path/to/client_id.json`.
 
 ### Service Accounts
 
