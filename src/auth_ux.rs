@@ -741,7 +741,7 @@ fn next_steps(
                 steps
             }
         }
-        VerificationReport::Failed { .. } => {
+        VerificationReport::Failed { error } => {
             let mut steps = Vec::new();
             if missing_search_console_scope {
                 steps.push(read_scope_step.clone());
@@ -749,7 +749,13 @@ fn next_steps(
             if explicit_credential_config_detected(settings, detection) {
                 steps.push("Fix or clear explicit credential configuration before browser login; it takes precedence over Application Default Credentials.".to_string());
             }
-            if !detection.gcloud_available {
+            if verification_needs_quota_project(error) {
+                steps.push("Set an ADC quota project with `gcloud auth application-default set-quota-project YOUR_PROJECT`; the project must have the Search Console API enabled and your account must be allowed to use it for quota.".to_string());
+                steps.push(
+                    "Then rerun `google-search-console-mcp auth status --verify-token`."
+                        .to_string(),
+                );
+            } else if !detection.gcloud_available {
                 steps.push("Install the Google Cloud SDK, or configure a service-account file with GOOGLE_APPLICATION_CREDENTIALS.".to_string());
             } else {
                 steps.push(format!("Run `{login_command}` for browser login."));
@@ -790,6 +796,14 @@ fn next_steps(
                 .to_string(),
         ],
     }
+}
+
+fn verification_needs_quota_project(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("quota project")
+        || lower.contains("quota_project")
+        || lower.contains("x-goog-user-project")
+        || lower.contains("service_disabled")
 }
 
 pub const GCLOUD_ADC_REQUIRED_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
@@ -1099,6 +1113,45 @@ mod tests {
         );
 
         assert!(steps.iter().any(|step| step.contains("auth login")));
+    }
+
+    #[test]
+    fn next_steps_call_out_missing_quota_project() {
+        let detection = CredentialDetection {
+            gcloud_available: true,
+            gcloud_version: Some("Google Cloud SDK 999.0.0".to_string()),
+            adc_file: FilePresence {
+                path: Some("/tmp/adc.json".to_string()),
+                present: true,
+            },
+            env: EnvPresence {
+                google_application_credentials: false,
+                google_application_credentials_file_present: false,
+                service_account_json_path: false,
+                service_account_json_path_file_present: false,
+                service_account_json: false,
+                oauth_client_secret_json: false,
+                oauth_client_secret_json_file_present: false,
+                oauth_refresh_token: false,
+                cloudsdk_config: false,
+            },
+        };
+
+        let steps = next_steps(
+            &test_settings(DEFAULT_SCOPE),
+            &detection,
+            &VerificationReport::Failed {
+                error: "PERMISSION_DENIED: local Application Default Credentials requires a quota project; SERVICE_DISABLED".to_string(),
+            },
+            true,
+        );
+
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("set-quota-project YOUR_PROJECT"))
+        );
+        assert!(!steps.iter().any(|step| step.contains("auth login")));
     }
 
     #[test]

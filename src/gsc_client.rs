@@ -1,8 +1,9 @@
 //! Thin authenticated adapter for Google Search Console REST APIs.
 
-use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
@@ -73,6 +74,11 @@ struct OAuthRefreshResponse {
     expires_in: Option<u64>,
     error: Option<String>,
     error_description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdcUserCredentialFile {
+    quota_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +158,11 @@ impl SearchConsoleClient {
             .map_err(SearchConsoleError::Transport)?;
 
         let auth_mode = select_auth_mode(settings)?;
+        let quota_project = settings.quota_project.clone().or_else(|| {
+            matches!(auth_mode, UpstreamAuthMode::Adc)
+                .then(adc_quota_project_id)
+                .flatten()
+        });
 
         Ok(Self {
             http,
@@ -161,10 +172,7 @@ impl SearchConsoleClient {
             scope: settings.scope.clone().into(),
             api_base_url: settings.api_base_url.clone().into(),
             inspection_base_url: settings.inspection_base_url.clone().into(),
-            quota_project: settings
-                .quota_project
-                .as_ref()
-                .map(|value| Arc::<str>::from(value.as_str())),
+            quota_project: quota_project.as_deref().map(Arc::<str>::from),
             max_row_limit: settings.max_row_limit,
         })
     }
@@ -868,6 +876,45 @@ fn snake_key_to_camel(key: &str) -> String {
     out
 }
 
+fn adc_quota_project_id() -> Option<String> {
+    let path = adc_credentials_path()?;
+    let raw = fs::read_to_string(path).ok()?;
+    parse_adc_quota_project_id(&raw)
+}
+
+fn parse_adc_quota_project_id(raw: &str) -> Option<String> {
+    let parsed: AdcUserCredentialFile = serde_json::from_str(raw).ok()?;
+    parsed
+        .quota_project_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn adc_credentials_path() -> Option<PathBuf> {
+    if let Some(config) = env::var_os("CLOUDSDK_CONFIG").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(config).join("application_default_credentials.json"));
+    }
+
+    if cfg!(windows)
+        && let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty())
+    {
+        return Some(
+            PathBuf::from(appdata)
+                .join("gcloud")
+                .join("application_default_credentials.json"),
+        );
+    }
+
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".config")
+                .join("gcloud")
+                .join("application_default_credentials.json")
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,6 +973,22 @@ mod tests {
             Ok(_) => panic!("unexpected auth mode result: Ok"),
             Err(err) => panic!("unexpected auth mode result: {err}"),
         }
+    }
+
+    #[test]
+    fn parses_adc_quota_project_id_without_exposing_credentials() {
+        assert_eq!(
+            parse_adc_quota_project_id(
+                r#"{"client_id":"client","client_secret":"secret","refresh_token":"refresh","quota_project_id":" search-console-quota "}"#
+            )
+            .as_deref(),
+            Some("search-console-quota")
+        );
+        assert_eq!(
+            parse_adc_quota_project_id(r#"{"quota_project_id":"   "}"#),
+            None
+        );
+        assert_eq!(parse_adc_quota_project_id("not-json"), None);
     }
 
     #[test]

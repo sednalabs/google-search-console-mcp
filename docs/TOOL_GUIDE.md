@@ -15,6 +15,9 @@ create a Desktop OAuth client and rerun
 The helper includes `https://www.googleapis.com/auth/cloud-platform` in the underlying ADC command
 because gcloud requires it for explicit Application Default Credentials scopes. The server runtime
 scope remains Search Console read-only unless you intentionally use operator mode.
+If verification says local ADC requires a quota project, run
+`gcloud auth application-default set-quota-project YOUR_PROJECT`; the project must have the Search
+Console API enabled.
 
 Use `google-search-console-mcp auth doctor` when credentials are not working. It reports the
 selected credential source, whether `gcloud` is available, whether the ADC file exists, and the

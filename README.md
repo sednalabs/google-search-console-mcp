@@ -144,6 +144,13 @@ The `cloud-platform` scope is included because `gcloud auth application-default 
 when writing user credentials for ADC with explicit scopes. The MCP server still defaults to
 read-only Search Console access.
 
+If verification reports that local ADC requires a quota project, attach one to the ADC file. The
+project must have the Search Console API enabled:
+
+```bash
+gcloud auth application-default set-quota-project YOUR_PROJECT
+```
+
 With a project-specific OAuth client:
 
 ```bash
@@ -185,7 +192,7 @@ mount a file and can provide the JSON as a sealed secret.
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | Standard Google service-account credential path |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH` | unset | Server-specific service-account credential path |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON` | unset | Server-specific raw service-account JSON |
-| `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | unset | Optional `x-goog-user-project` header |
+| `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | ADC `quota_project_id`, when present | Optional `x-goog-user-project` header override |
 | `GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS` | `15000` | Upstream request timeout |
 | `GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT` | `25000` | Maximum Search Analytics `rowLimit` |
 
