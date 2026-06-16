@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 pub const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/webmasters.readonly";
 pub const WRITE_SCOPE: &str = "https://www.googleapis.com/auth/webmasters";
@@ -11,6 +13,13 @@ const DEFAULT_API_BASE_URL: &str = "https://www.googleapis.com/webmasters/v3";
 const DEFAULT_INSPECTION_BASE_URL: &str = "https://searchconsole.googleapis.com/v1";
 const DEFAULT_HTTP_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_MAX_ROW_LIMIT: u32 = 25_000;
+pub const DEFAULT_SCRATCHPAD_SESSION_TTL_SECS: u64 = 900;
+pub const DEFAULT_SCRATCHPAD_MAX_SESSIONS: usize = 64;
+pub const DEFAULT_SCRATCHPAD_MAX_TABLES_PER_SESSION: usize = 32;
+pub const DEFAULT_SCRATCHPAD_MAX_ROWS_PER_SESSION: usize = 1_000_000;
+pub const DEFAULT_SCRATCHPAD_MAX_MEMORY_MB: usize = 256;
+pub const DEFAULT_SCRATCHPAD_QUERY_TIMEOUT_MS: u64 = 15_000;
+pub const DEFAULT_SCRATCHPAD_MAX_SQL_BYTES: usize = 65_536;
 const DEFAULT_USER_AGENT: &str = "google-search-console-mcp/0.1.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -44,19 +53,26 @@ pub struct Cli {
     #[arg(
         long,
         env = "GOOGLE_SEARCH_CONSOLE_MCP_PROFILE",
+        global = true,
         value_enum,
         default_value_t = CapabilityProfile::ReadOnly
     )]
     pub profile: CapabilityProfile,
 
     /// OAuth scope used for token acquisition.
-    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_SCOPE", default_value = DEFAULT_SCOPE)]
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCOPE",
+        global = true,
+        default_value = DEFAULT_SCOPE
+    )]
     pub scope: String,
 
     /// Base URL for Webmasters v3 endpoints.
     #[arg(
         long,
         env = "GOOGLE_SEARCH_CONSOLE_MCP_API_BASE_URL",
+        global = true,
         default_value = DEFAULT_API_BASE_URL
     )]
     pub api_base_url: String,
@@ -65,6 +81,7 @@ pub struct Cli {
     #[arg(
         long,
         env = "GOOGLE_SEARCH_CONSOLE_MCP_INSPECTION_BASE_URL",
+        global = true,
         default_value = DEFAULT_INSPECTION_BASE_URL
     )]
     pub inspection_base_url: String,
@@ -73,6 +90,7 @@ pub struct Cli {
     #[arg(
         long,
         env = "GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS",
+        global = true,
         default_value_t = DEFAULT_HTTP_TIMEOUT_MS
     )]
     pub http_timeout_ms: u64,
@@ -81,37 +99,126 @@ pub struct Cli {
     #[arg(
         long,
         env = "GOOGLE_SEARCH_CONSOLE_MCP_USER_AGENT",
+        global = true,
         default_value = DEFAULT_USER_AGENT
     )]
     pub user_agent: String,
 
     /// Optional path to OAuth client-secret JSON (`installed` or `web`) for refresh-token auth.
-    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON")]
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON",
+        global = true
+    )]
     pub oauth_client_secret_json: Option<String>,
 
     /// Optional OAuth refresh token used with `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON`.
-    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN")]
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN",
+        global = true
+    )]
     pub oauth_refresh_token: Option<String>,
 
     /// Optional path to service-account JSON. Standard GOOGLE_APPLICATION_CREDENTIALS also works.
-    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH")]
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH",
+        global = true
+    )]
     pub service_account_json_path: Option<String>,
 
     /// Optional raw service-account JSON for MCP clients that cannot mount files.
-    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON")]
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON",
+        global = true
+    )]
     pub service_account_json: Option<String>,
 
     /// Optional quota/billing project for Google APIs (`x-goog-user-project`).
-    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT")]
+    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT", global = true)]
     pub quota_project: Option<String>,
 
     /// Maximum allowed Search Analytics rowLimit.
     #[arg(
         long,
         env = "GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT",
+        global = true,
         default_value_t = DEFAULT_MAX_ROW_LIMIT
     )]
     pub max_row_limit: u32,
+
+    /// Optional root directory for DuckDB scratchpad session files.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR",
+        global = true
+    )]
+    pub scratchpad_root_dir: Option<PathBuf>,
+
+    /// Scratchpad session time-to-live in seconds.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_SESSION_TTL_SECS
+    )]
+    pub scratchpad_session_ttl_secs: u64,
+
+    /// Maximum active scratchpad sessions.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_SESSIONS
+    )]
+    pub scratchpad_max_sessions: usize,
+
+    /// Maximum scratchpad tables per session.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_TABLES_PER_SESSION
+    )]
+    pub scratchpad_max_tables_per_session: usize,
+
+    /// Maximum scratchpad rows per session.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_ROWS_PER_SESSION",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_ROWS_PER_SESSION
+    )]
+    pub scratchpad_max_rows_per_session: usize,
+
+    /// Maximum DuckDB memory budget per scratchpad session in MiB.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_MEMORY_MB",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_MEMORY_MB
+    )]
+    pub scratchpad_max_memory_mb: usize,
+
+    /// Scratchpad SQL query timeout in milliseconds.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_QUERY_TIMEOUT_MS",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_QUERY_TIMEOUT_MS
+    )]
+    pub scratchpad_query_timeout_ms: u64,
+
+    /// Maximum scratchpad SQL payload size in bytes.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SQL_BYTES",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_SQL_BYTES
+    )]
+    pub scratchpad_max_sql_bytes: usize,
 
     /// Print registered tool names and exit.
     #[arg(long)]
@@ -120,6 +227,96 @@ pub struct Cli {
     /// Print full tool schema snapshot JSON and exit.
     #[arg(long)]
     pub print_tool_schema: bool,
+
+    /// Optional command. Omit to run the stdio MCP server.
+    #[command(subcommand)]
+    pub command: Option<CliCommand>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum CliCommand {
+    /// Run the stdio MCP server. This is also the default when no command is supplied.
+    Serve,
+    /// Login, verify, and diagnose Google Search Console credentials.
+    Auth(AuthCli),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AuthCli {
+    #[command(subcommand)]
+    pub command: AuthSubcommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AuthSubcommand {
+    /// Run the browser-based gcloud Application Default Credentials login flow.
+    Login(AuthLoginArgs),
+    /// Print the exact gcloud login command without running it.
+    Command(AuthCommandArgs),
+    /// Show the configured credential source and optional token verification result.
+    Status(AuthStatusCliArgs),
+    /// Check the local auth environment and suggest the next action.
+    Doctor(AuthDoctorArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AuthLoginArgs {
+    /// Request the write-capable Search Console scope needed for operator tools.
+    #[arg(long)]
+    pub write_scope: bool,
+
+    /// Print a browser URL instead of launching a browser where supported by gcloud.
+    #[arg(long)]
+    pub headless: bool,
+
+    /// Optional Google OAuth client id file for gcloud ADC login. Recommended for Search Console scopes.
+    #[arg(long)]
+    pub client_id_file: Option<PathBuf>,
+
+    /// Print the command that would run, without invoking gcloud.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Skip post-login token acquisition verification.
+    #[arg(long)]
+    pub no_verify: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AuthCommandArgs {
+    /// Request the write-capable Search Console scope needed for operator tools.
+    #[arg(long)]
+    pub write_scope: bool,
+
+    /// Include the headless browser flag in the printed gcloud command.
+    #[arg(long)]
+    pub headless: bool,
+
+    /// Optional Google OAuth client id file for gcloud ADC login. Recommended for Search Console scopes.
+    #[arg(long)]
+    pub client_id_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AuthStatusCliArgs {
+    /// Acquire a Google access token to prove credentials work. The token is never printed.
+    #[arg(long)]
+    pub verify_token: bool,
+
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AuthDoctorArgs {
+    /// Acquire a Google access token to prove credentials work. The token is never printed.
+    #[arg(long)]
+    pub verify_token: bool,
+
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -136,8 +333,17 @@ pub struct Settings {
     pub service_account_json: Option<String>,
     pub quota_project: Option<String>,
     pub max_row_limit: u32,
+    pub scratchpad_root_dir: Option<PathBuf>,
+    pub scratchpad_session_ttl: Duration,
+    pub scratchpad_max_sessions: usize,
+    pub scratchpad_max_tables_per_session: usize,
+    pub scratchpad_max_rows_per_session: usize,
+    pub scratchpad_max_memory_mb: usize,
+    pub scratchpad_query_timeout: Duration,
+    pub scratchpad_max_sql_bytes: usize,
     pub print_tools: bool,
     pub print_tool_schema: bool,
+    pub command: Option<CliCommand>,
 }
 
 impl Settings {
@@ -149,6 +355,29 @@ impl Settings {
             return Err(anyhow!(
                 "max row limit must be between 1 and {DEFAULT_MAX_ROW_LIMIT}"
             ));
+        }
+        if cli.scratchpad_session_ttl_secs == 0 {
+            return Err(anyhow!("scratchpad session ttl must be positive"));
+        }
+        if cli.scratchpad_max_sessions == 0 {
+            return Err(anyhow!("scratchpad max sessions must be positive"));
+        }
+        if cli.scratchpad_max_tables_per_session == 0 {
+            return Err(anyhow!(
+                "scratchpad max tables per session must be positive"
+            ));
+        }
+        if cli.scratchpad_max_rows_per_session == 0 {
+            return Err(anyhow!("scratchpad max rows per session must be positive"));
+        }
+        if cli.scratchpad_max_memory_mb == 0 {
+            return Err(anyhow!("scratchpad max memory must be positive"));
+        }
+        if cli.scratchpad_query_timeout_ms == 0 {
+            return Err(anyhow!("scratchpad query timeout must be positive"));
+        }
+        if cli.scratchpad_max_sql_bytes == 0 {
+            return Err(anyhow!("scratchpad max sql bytes must be positive"));
         }
         Ok(Self {
             profile: cli.profile,
@@ -163,12 +392,80 @@ impl Settings {
             service_account_json: cli.service_account_json,
             quota_project: cli.quota_project,
             max_row_limit: cli.max_row_limit,
+            scratchpad_root_dir: cli.scratchpad_root_dir,
+            scratchpad_session_ttl: Duration::from_secs(cli.scratchpad_session_ttl_secs),
+            scratchpad_max_sessions: cli.scratchpad_max_sessions,
+            scratchpad_max_tables_per_session: cli.scratchpad_max_tables_per_session,
+            scratchpad_max_rows_per_session: cli.scratchpad_max_rows_per_session,
+            scratchpad_max_memory_mb: cli.scratchpad_max_memory_mb,
+            scratchpad_query_timeout: Duration::from_millis(cli.scratchpad_query_timeout_ms),
+            scratchpad_max_sql_bytes: cli.scratchpad_max_sql_bytes,
             print_tools: cli.print_tools,
             print_tool_schema: cli.print_tool_schema,
+            command: cli.command,
         })
     }
 }
 
+pub fn scope_allows_mutation(scope: &str) -> bool {
+    scope_contains(scope, WRITE_SCOPE)
+}
+
+pub fn scope_allows_read(scope: &str) -> bool {
+    scope_contains(scope, DEFAULT_SCOPE) || scope_allows_mutation(scope)
+}
+
+fn scope_contains(scope: &str, expected: &str) -> bool {
+    scope
+        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+        .any(|candidate| candidate == expected)
+}
+
 fn trim_trailing_slash(value: String) -> String {
     value.trim_end_matches('/').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_allows_mutation_only_when_write_scope_is_present() {
+        assert!(scope_allows_mutation(WRITE_SCOPE));
+        assert!(scope_allows_mutation(&format!(
+            "{DEFAULT_SCOPE},{WRITE_SCOPE}"
+        )));
+        assert!(!scope_allows_mutation(DEFAULT_SCOPE));
+        assert!(!scope_allows_mutation(
+            "https://www.googleapis.com/auth/drive"
+        ));
+        assert!(scope_allows_read(DEFAULT_SCOPE));
+        assert!(scope_allows_read(WRITE_SCOPE));
+        assert!(!scope_allows_read("https://www.googleapis.com/auth/drive"));
+    }
+
+    #[test]
+    fn auth_subcommands_accept_runtime_auth_flags_after_subcommand() {
+        let cli = Cli::try_parse_from([
+            "google-search-console-mcp",
+            "auth",
+            "status",
+            "--service-account-json-path",
+            "/tmp/service-account.json",
+            "--json",
+        ])
+        .expect("auth status should accept runtime auth flags after the subcommand");
+        let settings = Settings::from_cli(cli).expect("settings");
+
+        assert_eq!(
+            settings.service_account_json_path.as_deref(),
+            Some("/tmp/service-account.json")
+        );
+        assert!(matches!(
+            settings.command,
+            Some(CliCommand::Auth(AuthCli {
+                command: AuthSubcommand::Status(AuthStatusCliArgs { json: true, .. })
+            }))
+        ));
+    }
 }

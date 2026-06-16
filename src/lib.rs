@@ -1,5 +1,6 @@
 //! Rust MCP server for Google Search Console.
 
+pub mod auth_ux;
 pub mod config;
 pub mod contract;
 pub mod error;

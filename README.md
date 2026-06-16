@@ -9,6 +9,7 @@ The first release focuses on direct, low-overhead access to the official Search 
 - query Search Analytics performance data
 - inspect URL indexing status
 - list and retrieve sitemap metadata
+- ingest Search Analytics rows into a bounded local DuckDB scratchpad for agent-friendly analysis
 - submit/delete sitemaps and add/remove sites only when the operator profile is enabled
 - expose `find_tools` metadata for deferred-loading and tool-search clients
 
@@ -24,24 +25,84 @@ For local development:
 cargo run -- --print-tools
 ```
 
-## First Run
+## Easy Login
 
-The server exposes setup tools that do not return secrets:
+For most users, use Application Default Credentials (ADC): login once with `gcloud`, then let the
+MCP server reuse that local credential. Start with this:
+
+```bash
+google-search-console-mcp auth login
+google-search-console-mcp auth status --verify-token
+```
+
+If verification says local ADC requires a quota project, attach a Google Cloud project to the ADC
+file and verify again. The project must have the Search Console API enabled and your account must
+be allowed to use it for quota:
+
+```bash
+gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT
+gcloud auth application-default set-quota-project YOUR_PROJECT
+google-search-console-mcp auth status --verify-token
+```
+
+Only use a Desktop OAuth client file if Google rejects the Search Console scope during login:
+
+```bash
+google-search-console-mcp auth login --client-id-file /path/to/client_id.json
+```
+
+After verification passes, restart any MCP client that keeps long-lived stdio server processes and
+call `gsc_sites_list` to discover the exact Search Console property strings.
+
+Useful auth commands:
+
+```bash
+# Show local auth state and suggested fixes.
+google-search-console-mcp auth doctor
+
+# SSH or remote hosts where the browser cannot launch locally.
+google-search-console-mcp auth login --headless
+
+# Prepare for operator-only sitemap/site mutation tools.
+# If you pass --profile operator, login requests the write scope automatically.
+google-search-console-mcp --profile operator auth login
+export GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator
+export GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters
+# Or put the same runtime state in your MCP launcher command:
+# google-search-console-mcp --profile operator --scope https://www.googleapis.com/auth/webmasters
+
+# Print the underlying gcloud command without running it.
+google-search-console-mcp auth command
+```
+
+No command starts the stdio MCP server, preserving the normal MCP client launch path:
+
+```bash
+google-search-console-mcp
+```
+
+## MCP First Run
+
+The server also exposes setup tools that do not return secrets:
 
 - `gsc_get_started` shows the recommended first-run flow.
 - `gsc_auth_status` reports credential source and can optionally verify token acquisition.
-- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command.
+- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command
+  for clients that need setup help inside MCP.
 - `gsc_sites_list` discovers exact Search Console property strings after auth works.
 
-For local use, the lowest-friction path is usually:
+The CLI helper and setup tool both use the same low-friction Application Default Credentials
+model. The underlying read-only ADC login command is:
 
 ```bash
 gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters.readonly
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
 ```
 
-Then restart any stdio MCP client that keeps long-lived child processes and call
-`gsc_auth_status` with `verify_token=true`.
+If Google asks for a quota project after login, run
+`gcloud auth application-default set-quota-project YOUR_PROJECT`, then call `gsc_auth_status` with
+`verify_token=true`. After verification passes, restart any stdio MCP client that keeps long-lived
+child processes.
 
 ## Authentication
 
@@ -52,16 +113,16 @@ the read-only Search Console scope:
 https://www.googleapis.com/auth/webmasters.readonly
 ```
 
-Supported credential sources:
+Supported credential sources, in the order selected by the server:
 
-- Application Default Credentials from `gcloud auth application-default login`.
-- Standard service-account file via `GOOGLE_APPLICATION_CREDENTIALS`.
+- Server-specific raw service-account JSON via `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON`.
 - Server-specific service-account file via
   `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH`.
-- Server-specific raw service-account JSON via `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON`.
 - OAuth refresh-token auth via
   `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON` and
   `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN`.
+- Application Default Credentials from `google-search-console-mcp auth login` or
+  `gcloud auth application-default login`.
 
 For operator-only sitemap/site mutations, use credentials that have:
 
@@ -77,16 +138,54 @@ responses.
 For read-only use:
 
 ```bash
+google-search-console-mcp auth login
+```
+
+Equivalent underlying command:
+
+```bash
 gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters.readonly
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
+```
+
+The `cloud-platform` scope is included because `gcloud auth application-default login` requires it
+when writing user credentials for ADC with explicit scopes. The MCP server still defaults to
+read-only Search Console access.
+
+If verification reports that local ADC requires a quota project, attach one to the ADC file. The
+project must have the Search Console API enabled:
+
+```bash
+gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT
+gcloud auth application-default set-quota-project YOUR_PROJECT
+```
+
+The server automatically uses the ADC file's `quota_project_id` as the `x-goog-user-project`
+header. Set `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` only when you need to override that project
+for a specific deployment.
+
+With a project-specific OAuth client:
+
+```bash
+google-search-console-mcp auth login --client-id-file /path/to/client_id.json
 ```
 
 For operator use:
 
 ```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters
+google-search-console-mcp --profile operator auth login
+export GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator
+export GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters
+# Or configure the MCP launcher command with:
+# google-search-console-mcp --profile operator --scope https://www.googleapis.com/auth/webmasters
 ```
+
+`google-search-console-mcp auth login --write-scope` is still available when you want to mint
+operator-capable credentials before changing the runtime profile. In operator mode,
+`auth status --verify-token` checks both read access and the active token's granted write scope so
+a read-only token does not look ready for sitemap/site mutations. For SSH or browser-forwarded
+hosts, add `--headless`. To use a project-specific OAuth client, pass
+`--client-id-file /path/to/client_id.json`.
 
 ### Service Accounts
 
@@ -110,9 +209,17 @@ mount a file and can provide the JSON as a sealed secret.
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | Standard Google service-account credential path |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH` | unset | Server-specific service-account credential path |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON` | unset | Server-specific raw service-account JSON |
-| `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | unset | Optional `x-goog-user-project` header |
+| `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | ADC `quota_project_id`, when present | Optional `x-goog-user-project` header override |
 | `GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS` | `15000` | Upstream request timeout |
 | `GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT` | `25000` | Maximum Search Analytics `rowLimit` |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR` | OS temp dir | Optional DuckDB scratchpad file root. Custom roots must already exist. |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS` | `900` | Scratchpad session lifetime |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS` | `64` | Maximum active scratchpad sessions |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION` | `32` | Maximum scratchpad tables per session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_ROWS_PER_SESSION` | `1000000` | Maximum scratchpad rows per session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_MEMORY_MB` | `256` | DuckDB memory limit per scratchpad session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_QUERY_TIMEOUT_MS` | `15000` | Scratchpad SQL query timeout |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SQL_BYTES` | `65536` | Maximum scratchpad SQL payload size |
 
 ## Tools
 
@@ -123,6 +230,15 @@ mount a file and can provide the JSON as a sealed secret.
 - `gsc_sites_list`
 - `gsc_site_get`
 - `gsc_search_analytics_query`
+- `gsc_scratchpad_open_session`
+- `gsc_scratchpad_release_session`
+- `gsc_scratchpad_list_sessions`
+- `gsc_scratchpad_list_tables`
+- `gsc_scratchpad_query`
+- `gsc_scratchpad_drop_table`
+- `gsc_scratchpad_get_runtime_limits`
+- `gsc_scratchpad_set_runtime_limits`
+- `gsc_scratchpad_ingest_search_analytics`
 - `gsc_url_inspection_index_inspect`
 - `gsc_sitemaps_list`
 - `gsc_sitemap_get`
@@ -150,4 +266,53 @@ Search Console URL-prefix properties must include their trailing slash, for exam
 
 Search Analytics result volume is bounded by Google Search Console API limits. The server validates
 `rowLimit` against the documented 1 to 25,000 range and returns the upstream result as structured
-JSON without inventing SEO scores or rankings.
+JSON without inventing SEO scores or rankings. For broad agent harvesting, set `response_mode` to
+`compact` so the response is shaped into export-friendly rows with a paging receipt instead of the
+raw Google row objects.
+
+```json
+{
+  "site_url": "https://www.example.com/",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-31",
+  "dimensions": ["page", "query"],
+  "row_limit": 1000,
+  "response_mode": "compact"
+}
+```
+
+Compact Search Analytics responses include:
+
+- `summary.row_count`, `summary.start_row`, `summary.requested_row_limit`, and `summary.next_start_row`
+- `columns`, combining the requested dimensions with `clicks`, `impressions`, `ctr`, and `position`
+- `rows`, where each row is keyed by dimension name plus the standard Search Analytics metrics
+
+For larger evidence passes, use the scratchpad tools instead of returning every raw row through the
+chat transcript. Scratchpad tools are available in the default `read_only` profile because they only
+write to a local bounded DuckDB session, not to Google Search Console.
+
+```json
+{
+  "session_id": "seo_batch",
+  "table_name": "may_pages",
+  "site_url": "https://www.example.com/",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-31",
+  "dimensions": ["page", "query"],
+  "row_limit": 25000
+}
+```
+
+Then query the local table with restricted read-only SQL:
+
+```json
+{
+  "session_id": "seo_batch",
+  "sql": "SELECT page, SUM(clicks) AS clicks, SUM(impressions) AS impressions FROM may_pages GROUP BY page ORDER BY impressions DESC",
+  "page_size": 100
+}
+```
+
+Scratchpad SQL allows read-only `SELECT` and `WITH` queries plus DuckDB `DESCRIBE` and `SUMMARIZE`
+helpers. It denies mutating statements, multiple statements, extension loading, and file/external
+scan primitives.

@@ -2,11 +2,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
+use mcp_toolkit_scratchpad::{DuckDbEngine, ScratchpadSessionConfig, ScratchpadSessionManager};
 use rmcp::serve_server;
 use rmcp::transport::stdio;
 use tracing_subscriber::EnvFilter;
 
+use google_search_console_mcp::auth_ux::run_auth_command;
 use google_search_console_mcp::config::{Cli, Settings};
+use google_search_console_mcp::config::{CliCommand, WRITE_SCOPE, scope_allows_mutation};
 use google_search_console_mcp::gsc_client::SearchConsoleClient;
 use google_search_console_mcp::server::SearchConsoleMcp;
 use google_search_console_mcp::tools::{registered_tool_names, registered_tool_schema_snapshot};
@@ -23,6 +26,16 @@ async fn run() -> Result<()> {
     init_tracing();
 
     let settings = Settings::from_cli(Cli::parse())?;
+    if let Some(command) = settings.command.clone() {
+        match command {
+            CliCommand::Serve => {}
+            CliCommand::Auth(auth) => {
+                run_auth_command(&settings, &auth.command).await?;
+                return Ok(());
+            }
+        }
+    }
+
     if settings.print_tools {
         println!(
             "{}",
@@ -39,8 +52,18 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
+    if settings.profile.allows_mutation() && !scope_allows_mutation(&settings.scope) {
+        eprintln!(
+            "warning: operator profile is enabled but the configured scope does not include the write scope; run `google-search-console-mcp auth login --write-scope` and set GOOGLE_SEARCH_CONSOLE_MCP_SCOPE={WRITE_SCOPE} before using mutation tools"
+        );
+    }
+
     let client = Arc::new(SearchConsoleClient::from_settings(&settings).await?);
-    let server = SearchConsoleMcp::new(client, settings.profile);
+    let scratchpad_sessions = Arc::new(ScratchpadSessionManager::new(
+        Arc::new(DuckDbEngine::new()?),
+        scratchpad_config(&settings),
+    )?);
+    let server = SearchConsoleMcp::new(client, settings.profile, scratchpad_sessions);
 
     mcp_toolkit_observability::emit_event(
         mcp_toolkit_observability::Level::INFO,
@@ -55,6 +78,22 @@ async fn run() -> Result<()> {
     let service = serve_server(server, stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+fn scratchpad_config(settings: &Settings) -> ScratchpadSessionConfig {
+    let mut config = ScratchpadSessionConfig::new(
+        settings.scratchpad_session_ttl,
+        settings.scratchpad_max_sessions,
+        settings.scratchpad_max_tables_per_session,
+        settings.scratchpad_max_rows_per_session,
+        settings.scratchpad_max_memory_mb,
+    )
+    .with_query_timeout(settings.scratchpad_query_timeout)
+    .with_max_sql_bytes(settings.scratchpad_max_sql_bytes);
+    if let Some(root_dir) = &settings.scratchpad_root_dir {
+        config = config.with_root_dir(root_dir.clone());
+    }
+    config
 }
 
 fn init_tracing() {

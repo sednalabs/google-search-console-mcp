@@ -1,8 +1,9 @@
 //! Thin authenticated adapter for Google Search Console REST APIs.
 
-use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{env, fs};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
@@ -12,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::{OnceCell, RwLock};
 
-use crate::config::Settings;
+use crate::config::{Settings, WRITE_SCOPE};
 use crate::error::SearchConsoleError;
 
 const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -42,6 +43,7 @@ const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b',')
     .add(b';')
     .add(b'=');
+const GOOGLE_TOKENINFO_URL: &str = "https://oauth2.googleapis.com/tokeninfo";
 
 #[derive(Debug, Clone, Deserialize)]
 struct OAuthClientSecretFile {
@@ -73,6 +75,11 @@ struct OAuthRefreshResponse {
     expires_in: Option<u64>,
     error: Option<String>,
     error_description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdcUserCredentialFile {
+    quota_project_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +159,11 @@ impl SearchConsoleClient {
             .map_err(SearchConsoleError::Transport)?;
 
         let auth_mode = select_auth_mode(settings)?;
+        let quota_project = settings.quota_project.clone().or_else(|| {
+            matches!(auth_mode, UpstreamAuthMode::Adc)
+                .then(adc_quota_project_id)
+                .flatten()
+        });
 
         Ok(Self {
             http,
@@ -161,10 +173,7 @@ impl SearchConsoleClient {
             scope: settings.scope.clone().into(),
             api_base_url: settings.api_base_url.clone().into(),
             inspection_base_url: settings.inspection_base_url.clone().into(),
-            quota_project: settings
-                .quota_project
-                .as_ref()
-                .map(|value| Arc::<str>::from(value.as_str())),
+            quota_project: quota_project.as_deref().map(Arc::<str>::from),
             max_row_limit: settings.max_row_limit,
         })
     }
@@ -191,7 +200,21 @@ impl SearchConsoleClient {
     }
 
     pub async fn verify_token(&self) -> Result<(), SearchConsoleError> {
-        self.access_token().await.map(|_| ())
+        self.list_sites().await.map(|_| ())
+    }
+
+    pub async fn verify_required_scope(
+        &self,
+        required_scope: &str,
+    ) -> Result<(), SearchConsoleError> {
+        let scopes = self.access_token_scopes().await?;
+        if scopes.iter().any(|scope| scope == required_scope) {
+            Ok(())
+        } else {
+            Err(SearchConsoleError::AuthBootstrap(format!(
+                "active Google access token does not include required scope {required_scope}; run `google-search-console-mcp auth login --write-scope`, ensure the MCP launcher uses `--profile operator --scope {WRITE_SCOPE}` or matching environment variables, then restart long-lived MCP clients"
+            )))
+        }
     }
 
     pub async fn get_site(&self, site_url: &str) -> Result<Value, SearchConsoleError> {
@@ -514,6 +537,43 @@ impl SearchConsoleClient {
         }
     }
 
+    async fn access_token_scopes(&self) -> Result<Vec<String>, SearchConsoleError> {
+        let token = self.access_token().await?;
+        let response = self
+            .http
+            .get(GOOGLE_TOKENINFO_URL)
+            .query(&[("access_token", token)])
+            .send()
+            .await
+            .map_err(SearchConsoleError::Transport)?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(SearchConsoleError::Transport)?;
+
+        if !status.is_success() {
+            let message = String::from_utf8_lossy(&bytes).trim().to_string();
+            return Err(SearchConsoleError::UpstreamApi {
+                status: status.as_u16(),
+                message: if message.is_empty() {
+                    "tokeninfo scope check failed with no upstream response body".to_string()
+                } else {
+                    clip_message(format!("tokeninfo scope check failed: {message}"))
+                },
+            });
+        }
+
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(SearchConsoleError::UpstreamJson)?;
+        let scope = value.get("scope").and_then(Value::as_str).ok_or_else(|| {
+            SearchConsoleError::AuthBootstrap(
+                "Google tokeninfo response did not include granted scopes".to_string(),
+            )
+        })?;
+        Ok(parse_scope_list(scope))
+    }
+
     async fn refresh_oauth_access_token(
         &self,
         config: &OAuthRefreshConfig,
@@ -730,6 +790,14 @@ fn validate_dimensions(dimensions: &[String]) -> Result<(), SearchConsoleError> 
     Ok(())
 }
 
+fn parse_scope_list(scope: &str) -> Vec<String> {
+    scope
+        .split([' ', ',', '\n', '\t'])
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn parse_https_upstream_url(raw: &str) -> Result<Url, SearchConsoleError> {
     let url = Url::parse(raw).map_err(|err| {
         SearchConsoleError::invalid("upstream_url", format!("invalid upstream URL: {err}"))
@@ -868,6 +936,45 @@ fn snake_key_to_camel(key: &str) -> String {
     out
 }
 
+fn adc_quota_project_id() -> Option<String> {
+    let path = adc_credentials_path()?;
+    let raw = fs::read_to_string(path).ok()?;
+    parse_adc_quota_project_id(&raw)
+}
+
+fn parse_adc_quota_project_id(raw: &str) -> Option<String> {
+    let parsed: AdcUserCredentialFile = serde_json::from_str(raw).ok()?;
+    parsed
+        .quota_project_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn adc_credentials_path() -> Option<PathBuf> {
+    if let Some(config) = env::var_os("CLOUDSDK_CONFIG").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(config).join("application_default_credentials.json"));
+    }
+
+    if cfg!(windows)
+        && let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty())
+    {
+        return Some(
+            PathBuf::from(appdata)
+                .join("gcloud")
+                .join("application_default_credentials.json"),
+        );
+    }
+
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(|home| {
+            PathBuf::from(home)
+                .join(".config")
+                .join("gcloud")
+                .join("application_default_credentials.json")
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -929,6 +1036,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_adc_quota_project_id_without_exposing_credentials() {
+        assert_eq!(
+            parse_adc_quota_project_id(
+                r#"{"client_id":"client","client_secret":"secret","refresh_token":"refresh","quota_project_id":" search-console-quota "}"#
+            )
+            .as_deref(),
+            Some("search-console-quota")
+        );
+        assert_eq!(
+            parse_adc_quota_project_id(r#"{"quota_project_id":"   "}"#),
+            None
+        );
+        assert_eq!(parse_adc_quota_project_id("not-json"), None);
+    }
+
+    #[test]
+    fn parses_granted_scope_lists_from_google_tokeninfo() {
+        assert_eq!(
+            parse_scope_list(
+                "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/webmasters,https://www.googleapis.com/auth/userinfo.email"
+            ),
+            vec![
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/webmasters",
+                "https://www.googleapis.com/auth/userinfo.email"
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_non_google_oauth_token_uri() {
         let client_secret = tempfile::NamedTempFile::new().expect("temp file");
         std::fs::write(
@@ -984,8 +1121,17 @@ mod tests {
             service_account_json: None,
             quota_project: None,
             max_row_limit: 25_000,
+            scratchpad_root_dir: None,
+            scratchpad_session_ttl: Duration::from_secs(900),
+            scratchpad_max_sessions: 64,
+            scratchpad_max_tables_per_session: 32,
+            scratchpad_max_rows_per_session: 1_000_000,
+            scratchpad_max_memory_mb: 256,
+            scratchpad_query_timeout: Duration::from_secs(15),
+            scratchpad_max_sql_bytes: 65_536,
             print_tools: false,
             print_tool_schema: false,
+            command: None,
         }
     }
 }
