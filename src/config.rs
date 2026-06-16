@@ -368,9 +368,7 @@ impl Settings {
             ));
         }
         if cli.scratchpad_max_rows_per_session == 0 {
-            return Err(anyhow!(
-                "scratchpad max rows per session must be positive"
-            ));
+            return Err(anyhow!("scratchpad max rows per session must be positive"));
         }
         if cli.scratchpad_max_memory_mb == 0 {
             return Err(anyhow!("scratchpad max memory must be positive"));

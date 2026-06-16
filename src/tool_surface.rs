@@ -126,7 +126,14 @@ fn tool_capabilities() -> Vec<ToolCapability> {
             "scratchpad",
             true,
             "Run read-only DuckDB SQL against scratchpad tables with bounded paging.",
-            ["scratchpad", "duckdb", "sql", "query", "select", "summarize"],
+            [
+                "scratchpad",
+                "duckdb",
+                "sql",
+                "query",
+                "select",
+                "summarize",
+            ],
         ),
         cap(
             "gsc_scratchpad_drop_table",

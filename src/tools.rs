@@ -3,8 +3,8 @@ use std::time::Instant;
 use mcp_toolkit_core::tool_inventory::{ToolOperation, ToolSearchFilter, ToolSearchResponse};
 use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 use mcp_toolkit_scratchpad::{
-    ScratchpadIngestColumn, ScratchpadIngestMode, ScratchpadQueryProjection,
-    ScratchpadSessionInfo, ScratchpadTableInfo,
+    ScratchpadIngestColumn, ScratchpadIngestMode, ScratchpadQueryProjection, ScratchpadSessionInfo,
+    ScratchpadTableInfo,
 };
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -888,7 +888,10 @@ impl SearchConsoleMcp {
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
         let limit = args.limit.unwrap_or(50).clamp(1, 100);
-        match self.scratchpad_sessions.list_tables(&args.session_id, limit) {
+        match self
+            .scratchpad_sessions
+            .list_tables(&args.session_id, limit)
+        {
             Ok(tables) => Ok(contract::success(
                 json!({
                     "session_id": args.session_id,
