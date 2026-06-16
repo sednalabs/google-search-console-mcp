@@ -26,24 +26,32 @@ cargo run -- --print-tools
 
 ## Easy Login
 
-For local use, run the browser login helper once. Search Console scopes may require a Google
-OAuth client id file; if Google rejects the requested scope, create a Desktop OAuth client and
-pass it with `--client-id-file`.
+For most users, use Application Default Credentials (ADC): login once with `gcloud`, then let the
+MCP server reuse that local credential. Start with this:
 
 ```bash
 google-search-console-mcp auth login
-# or, when Google requires an app-specific OAuth client:
-google-search-console-mcp auth login --client-id-file /path/to/client_id.json
-```
-
-Then verify credentials without printing tokens:
-
-```bash
 google-search-console-mcp auth status --verify-token
 ```
 
-After login, restart any MCP client that keeps long-lived stdio server processes and call
-`gsc_sites_list` to discover the exact Search Console property strings.
+If verification says local ADC requires a quota project, attach a Google Cloud project to the ADC
+file and verify again. The project must have the Search Console API enabled and your account must
+be allowed to use it for quota:
+
+```bash
+gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT
+gcloud auth application-default set-quota-project YOUR_PROJECT
+google-search-console-mcp auth status --verify-token
+```
+
+Only use a Desktop OAuth client file if Google rejects the Search Console scope during login:
+
+```bash
+google-search-console-mcp auth login --client-id-file /path/to/client_id.json
+```
+
+After verification passes, restart any MCP client that keeps long-lived stdio server processes and
+call `gsc_sites_list` to discover the exact Search Console property strings.
 
 Useful auth commands:
 
@@ -53,9 +61,6 @@ google-search-console-mcp auth doctor
 
 # SSH or remote hosts where the browser cannot launch locally.
 google-search-console-mcp auth login --headless
-
-# Use a project-specific Google OAuth client id file when needed.
-google-search-console-mcp auth login --client-id-file /path/to/client_id.json
 
 # Prepare for operator-only sitemap/site mutation tools.
 google-search-console-mcp auth login --write-scope
@@ -85,16 +90,17 @@ The server also exposes setup tools that do not return secrets:
 - `gsc_sites_list` discovers exact Search Console property strings after auth works.
 
 The CLI helper and setup tool both use the same low-friction Application Default Credentials
-model. For Search Console scopes, prefer adding `--client-id-file /path/to/client_id.json` when
-Google requires a project-specific OAuth client:
+model. The underlying read-only ADC login command is:
 
 ```bash
 gcloud auth application-default login \
   --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
 ```
 
-Then restart any stdio MCP client that keeps long-lived child processes and call
-`gsc_auth_status` with `verify_token=true`.
+If Google asks for a quota project after login, run
+`gcloud auth application-default set-quota-project YOUR_PROJECT`, then call `gsc_auth_status` with
+`verify_token=true`. After verification passes, restart any stdio MCP client that keeps long-lived
+child processes.
 
 ## Authentication
 
@@ -148,8 +154,13 @@ If verification reports that local ADC requires a quota project, attach one to t
 project must have the Search Console API enabled:
 
 ```bash
+gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT
 gcloud auth application-default set-quota-project YOUR_PROJECT
 ```
+
+The server automatically uses the ADC file's `quota_project_id` as the `x-goog-user-project`
+header. Set `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` only when you need to override that project
+for a specific deployment.
 
 With a project-specific OAuth client:
 

@@ -2,22 +2,32 @@
 
 ## Setup Tools
 
-For humans at a shell, prefer the CLI auth flow before starting an MCP client:
+For humans at a shell, prefer the CLI auth flow before starting an MCP client. The normal path is
+login, verify, then start or restart the MCP client:
 
 ```bash
 google-search-console-mcp auth login
 google-search-console-mcp auth status --verify-token
 ```
 
-Search Console scopes may require a Google OAuth client id file. If Google rejects the scope,
-create a Desktop OAuth client and rerun
-`google-search-console-mcp auth login --client-id-file /path/to/client_id.json`.
 The helper includes `https://www.googleapis.com/auth/cloud-platform` in the underlying ADC command
 because gcloud requires it for explicit Application Default Credentials scopes. The server runtime
 scope remains Search Console read-only unless you intentionally use operator mode.
-If verification says local ADC requires a quota project, run
-`gcloud auth application-default set-quota-project YOUR_PROJECT`; the project must have the Search
-Console API enabled.
+
+If verification says local ADC requires a quota project, attach one and verify again:
+
+```bash
+gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT
+gcloud auth application-default set-quota-project YOUR_PROJECT
+google-search-console-mcp auth status --verify-token
+```
+
+The server automatically uses the ADC file's `quota_project_id` for `x-goog-user-project`. Set
+`GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` only when a deployment needs an explicit override.
+
+Search Console scopes may require a Google OAuth client id file. If Google rejects the scope,
+create a Desktop OAuth client and rerun
+`google-search-console-mcp auth login --client-id-file /path/to/client_id.json`.
 
 Use `google-search-console-mcp auth doctor` when credentials are not working. It reports the
 selected credential source, whether `gcloud` is available, whether the ADC file exists, and the
@@ -27,7 +37,7 @@ Inside MCP, use `gsc_get_started` immediately after install. It returns the reco
 flow, safe starter tools, and credential options without making an upstream Google request.
 
 Use `gsc_auth_status` to inspect auth configuration. Set `verify_token=true` when you want to prove
-token acquisition; the tool never returns the token.
+token acquisition and Search Console API access; the tool never returns the token.
 
 Use `gsc_auth_login_command` only when the user needs a copyable `gcloud` Application Default
 Credentials command inside MCP. Set `write_scope=true` only when preparing to run operator tools;

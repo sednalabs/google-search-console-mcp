@@ -216,10 +216,11 @@ impl SearchConsoleMcp {
                 },
                 "first_steps": [
                     "Before starting a long-lived MCP client, run google-search-console-mcp auth login for the easiest browser login.",
-                    "If Google rejects the Search Console scope, create a Desktop OAuth client and rerun google-search-console-mcp auth login --client-id-file /path/to/client_id.json.",
+                    "Call google-search-console-mcp auth status --verify-token or gsc_auth_status with verify_token=true to prove Google auth without returning a token.",
+                    "If verification says local ADC requires a quota project, enable searchconsole.googleapis.com on a Google Cloud project and run gcloud auth application-default set-quota-project YOUR_PROJECT.",
+                    "If Google rejects the Search Console scope during login, create a Desktop OAuth client and rerun google-search-console-mcp auth login --client-id-file /path/to/client_id.json.",
                     "If you are already inside MCP, call gsc_auth_status with verify_token=false to inspect configuration without making a token request.",
                     "If credentials are missing, call gsc_auth_login_command and run the returned gcloud command.",
-                    "Call google-search-console-mcp auth status --verify-token or gsc_auth_status with verify_token=true to prove Google auth without returning a token.",
                     "Call gsc_sites_list to discover the exact Search Console property string.",
                     "Use the exact siteUrl from gsc_sites_list when querying analytics, URL inspection, or sitemaps."
                 ],
@@ -229,6 +230,8 @@ impl SearchConsoleMcp {
                         "best_for": "lowest-friction local browser login",
                         "command": "google-search-console-mcp auth login",
                         "client_id_file_command": "google-search-console-mcp auth login --client-id-file /path/to/client_id.json",
+                        "quota_project_command": "gcloud auth application-default set-quota-project YOUR_PROJECT",
+                        "quota_project_note": "Only needed when Google reports local ADC requires a quota project; the project must have the Search Console API enabled.",
                         "env": []
                     },
                     {
@@ -349,6 +352,7 @@ impl SearchConsoleMcp {
                 "client_id_file": args.client_id_file,
                 "after_login": after_login,
                 "client_id_file_hint": "Search Console scopes may require a Google OAuth client id file; pass client_id_file when Google rejects the requested scope.",
+                "quota_project_hint": "If verification says local ADC requires a quota project, run `gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT` and `gcloud auth application-default set-quota-project YOUR_PROJECT`, then verify again.",
                 "operator_env": if args.write_scope {
                     json!({
                         "GOOGLE_SEARCH_CONSOLE_MCP_PROFILE": "operator",
@@ -692,6 +696,7 @@ fn auth_next_steps(
         (true, Some(false)) | (true, None) => {
             let mut steps = vec![
                 format!("Run {login_command} for local browser login."),
+                "If the token check reports that local ADC requires a quota project, run gcloud auth application-default set-quota-project YOUR_PROJECT after enabling searchconsole.googleapis.com on that project.".to_string(),
                 "Call gsc_auth_login_command if you need a copyable gcloud command inside MCP."
                     .to_string(),
                 "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.".to_string(),
