@@ -997,21 +997,25 @@ impl SearchConsoleMcp {
         Parameters(args): Parameters<ScratchpadRuntimeLimitsArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
-        if let Some(max_sessions) = args.max_sessions {
-            if let Err(err) = self
-                .scratchpad_sessions
-                .set_max_sessions_limit(max_sessions)
-            {
-                return Ok(contract::error(SearchConsoleError::from(err), started));
-            }
+        if let Err(err) = args
+            .max_sessions
+            .map(|max_sessions| {
+                self.scratchpad_sessions
+                    .set_max_sessions_limit(max_sessions)
+            })
+            .transpose()
+        {
+            return Ok(contract::error(SearchConsoleError::from(err), started));
         }
-        if let Some(max_tables_per_session) = args.max_tables_per_session {
-            if let Err(err) = self
-                .scratchpad_sessions
-                .set_max_tables_per_session_limit(max_tables_per_session)
-            {
-                return Ok(contract::error(SearchConsoleError::from(err), started));
-            }
+        if let Err(err) = args
+            .max_tables_per_session
+            .map(|max_tables_per_session| {
+                self.scratchpad_sessions
+                    .set_max_tables_per_session_limit(max_tables_per_session)
+            })
+            .transpose()
+        {
+            return Ok(contract::error(SearchConsoleError::from(err), started));
         }
         Ok(contract::success(
             json!({
