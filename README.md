@@ -64,7 +64,8 @@ google-search-console-mcp auth doctor
 google-search-console-mcp auth login --headless
 
 # Prepare for operator-only sitemap/site mutation tools.
-google-search-console-mcp auth login --write-scope
+# If you pass --profile operator, login requests the write scope automatically.
+google-search-console-mcp --profile operator auth login
 export GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator
 export GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters
 # Or put the same runtime state in your MCP launcher command:
@@ -172,15 +173,19 @@ google-search-console-mcp auth login --client-id-file /path/to/client_id.json
 For operator use:
 
 ```bash
-google-search-console-mcp auth login --write-scope
+google-search-console-mcp --profile operator auth login
 export GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator
 export GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters
 # Or configure the MCP launcher command with:
 # google-search-console-mcp --profile operator --scope https://www.googleapis.com/auth/webmasters
 ```
 
-For SSH or browser-forwarded hosts, add `--headless`. To use a project-specific OAuth client,
-pass `--client-id-file /path/to/client_id.json`.
+`google-search-console-mcp auth login --write-scope` is still available when you want to mint
+operator-capable credentials before changing the runtime profile. In operator mode,
+`auth status --verify-token` checks both read access and the active token's granted write scope so
+a read-only token does not look ready for sitemap/site mutations. For SSH or browser-forwarded
+hosts, add `--headless`. To use a project-specific OAuth client, pass
+`--client-id-file /path/to/client_id.json`.
 
 ### Service Accounts
 

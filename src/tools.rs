@@ -265,6 +265,26 @@ fn redact_tool_error_message(err: &impl std::fmt::Display) -> String {
     contract::redact_secret_text(&err.to_string())
 }
 
+fn operator_mutation_error(err: SearchConsoleError) -> SearchConsoleError {
+    match err {
+        SearchConsoleError::UpstreamApi { status, message }
+            if status == 403 && insufficient_scope_message(&message) =>
+        {
+            SearchConsoleError::AuthBootstrap(format!(
+                "Google rejected this mutation because the active access token does not include the write-capable Search Console scope {WRITE_SCOPE}; run `google-search-console-mcp auth login --write-scope`, ensure the MCP launcher uses `--profile operator --scope {WRITE_SCOPE}` or matching environment variables, then restart long-lived MCP clients"
+            ))
+        }
+        other => other,
+    }
+}
+
+fn insufficient_scope_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("insufficient authentication scopes")
+        || lower.contains("insufficientpermissions")
+        || lower.contains("insufficient permission")
+}
+
 fn compact_search_analytics_response(
     value: Value,
     dimensions: &[String],
@@ -661,7 +681,36 @@ impl SearchConsoleMcp {
         } else {
             json!({ "checked": false })
         };
-        let token_ok = token_check.get("ok").and_then(Value::as_bool);
+        let operator_scope_check = if args.verify_token
+            && operator_scope_check_required(self.profile, self.client.scope())
+        {
+            match self.client.verify_required_scope(WRITE_SCOPE).await {
+                Ok(()) => json!({
+                    "checked": true,
+                    "required": true,
+                    "required_scope": WRITE_SCOPE,
+                    "ok": true
+                }),
+                Err(err) => json!({
+                    "checked": true,
+                    "required": true,
+                    "required_scope": WRITE_SCOPE,
+                    "ok": false,
+                    "error": redact_tool_error_message(&err)
+                }),
+            }
+        } else {
+            json!({
+                "checked": false,
+                "required": operator_scope_check_required(self.profile, self.client.scope()),
+                "required_scope": if operator_scope_check_required(self.profile, self.client.scope()) {
+                    Value::String(WRITE_SCOPE.to_string())
+                } else {
+                    Value::Null
+                }
+            })
+        };
+        let token_ok = combined_token_ok(&token_check, &operator_scope_check);
         let auth_source_candidate = self.client.auth_source();
         let credential_material_detected = credential_material_detected_for_auth_source(
             auth_source_candidate,
@@ -689,6 +738,7 @@ impl SearchConsoleMcp {
                 "credential_material_detected": credential_material_detected,
                 "detected_env": auth_env_presence(),
                 "token_check": token_check,
+                "operator_scope_check": operator_scope_check,
                 "next_steps": auth_next_steps(self.profile, self.client.scope(), args.verify_token, token_ok),
                 "secrets_returned": false
             }),
@@ -706,7 +756,8 @@ impl SearchConsoleMcp {
         Parameters(args): Parameters<AuthLoginCommandArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
-        let scope = login_scope_for_mcp_command(self.client.scope(), args.write_scope);
+        let write_scope = args.write_scope || self.profile.allows_mutation();
+        let scope = login_scope_for_mcp_command(self.client.scope(), write_scope);
         let command = login_command_for_scope(
             scope,
             args.headless,
@@ -714,23 +765,30 @@ impl SearchConsoleMcp {
         );
         let preferred_cli = auth_login_cli_command(
             scope,
-            args.write_scope,
+            write_scope,
             args.headless,
             args.client_id_file.as_deref().map(std::path::Path::new),
         );
-        let after_login = after_login_instruction(args.write_scope, self.client.scope(), scope);
+        let after_login = after_login_instruction(write_scope, self.client.scope(), scope);
         Ok(contract::success(
             json!({
                 "command": command,
                 "preferred_cli": preferred_cli,
                 "scope": scope,
-                "write_scope": args.write_scope,
+                "write_scope": write_scope,
+                "write_scope_source": if args.write_scope {
+                    "explicit_argument"
+                } else if self.profile.allows_mutation() {
+                    "operator_profile"
+                } else {
+                    "not_requested"
+                },
                 "headless": args.headless,
                 "client_id_file": args.client_id_file,
                 "after_login": after_login,
                 "client_id_file_hint": "Search Console scopes may require a Google OAuth client id file; pass client_id_file when Google rejects the requested scope.",
                 "quota_project_hint": "If verification says local ADC requires a quota project, run `gcloud services enable searchconsole.googleapis.com --project YOUR_PROJECT` and `gcloud auth application-default set-quota-project YOUR_PROJECT`, then verify again.",
-                "operator_env": if args.write_scope {
+                "operator_env": if write_scope {
                     json!({
                         "GOOGLE_SEARCH_CONSOLE_MCP_PROFILE": "operator",
                         "GOOGLE_SEARCH_CONSOLE_MCP_SCOPE": WRITE_SCOPE
@@ -1190,7 +1248,7 @@ impl SearchConsoleMcp {
                 json!({ "mutation": true }),
                 started,
             )),
-            Err(err) => Ok(contract::error(err, started)),
+            Err(err) => Ok(contract::error(operator_mutation_error(err), started)),
         }
     }
 
@@ -1214,7 +1272,7 @@ impl SearchConsoleMcp {
                 json!({ "mutation": true }),
                 started,
             )),
-            Err(err) => Ok(contract::error(err, started)),
+            Err(err) => Ok(contract::error(operator_mutation_error(err), started)),
         }
     }
 
@@ -1234,7 +1292,7 @@ impl SearchConsoleMcp {
                 json!({ "mutation": true }),
                 started,
             )),
-            Err(err) => Ok(contract::error(err, started)),
+            Err(err) => Ok(contract::error(operator_mutation_error(err), started)),
         }
     }
 
@@ -1254,7 +1312,7 @@ impl SearchConsoleMcp {
                 json!({ "mutation": true }),
                 started,
             )),
-            Err(err) => Ok(contract::error(err, started)),
+            Err(err) => Ok(contract::error(operator_mutation_error(err), started)),
         }
     }
 }
@@ -1275,6 +1333,30 @@ fn credential_material_detected_for_auth_source(
     local_detected: bool,
 ) -> bool {
     local_detected || !matches!(auth_source, AuthSource::GoogleDefaultProviderChain)
+}
+
+fn operator_scope_check_required(profile: CapabilityProfile, scope: &str) -> bool {
+    profile.allows_mutation() || scope_allows_mutation(scope)
+}
+
+fn combined_token_ok(token_check: &Value, operator_scope_check: &Value) -> Option<bool> {
+    let token_ok = token_check.get("ok").and_then(Value::as_bool);
+    let operator_scope_required = operator_scope_check
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let operator_scope_ok = operator_scope_check.get("ok").and_then(Value::as_bool);
+
+    match (token_ok, operator_scope_required, operator_scope_ok) {
+        (Some(false), _, _) => Some(false),
+        (Some(true), true, Some(true)) => Some(true),
+        (Some(true), true, Some(false)) => Some(false),
+        (Some(true), true, None) => None,
+        (Some(true), false, _) => Some(true),
+        (None, true, Some(false)) => Some(false),
+        (None, true, Some(true)) => None,
+        (None, _, _) => None,
+    }
 }
 
 fn login_scope_for_mcp_command(current_scope: &str, write_scope: bool) -> &str {
@@ -1438,6 +1520,35 @@ mod tests {
         assert!(!redacted.contains("abc"));
         assert!(!redacted.contains("xyz"));
         assert!(redacted.contains("[redacted]"));
+    }
+
+    #[test]
+    fn combined_token_status_requires_operator_scope_when_checked() {
+        let token_check = json!({ "checked": true, "ok": true });
+        let scope_ok = json!({ "checked": true, "required": true, "ok": true });
+        let scope_missing = json!({ "checked": true, "required": true, "ok": false });
+        let scope_not_required = json!({ "checked": false, "required": false });
+
+        assert_eq!(combined_token_ok(&token_check, &scope_ok), Some(true));
+        assert_eq!(combined_token_ok(&token_check, &scope_missing), Some(false));
+        assert_eq!(
+            combined_token_ok(&token_check, &scope_not_required),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn operator_mutation_error_explains_missing_write_scope() {
+        let err = operator_mutation_error(SearchConsoleError::UpstreamApi {
+            status: 403,
+            message: "Request had insufficient authentication scopes.".to_string(),
+        });
+
+        assert!(matches!(
+            err,
+            SearchConsoleError::AuthBootstrap(message)
+                if message.contains(WRITE_SCOPE) && message.contains("auth login --write-scope")
+        ));
     }
 
     #[test]

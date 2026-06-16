@@ -155,7 +155,7 @@ fn login_scope_from_env_hint<'a>(
     ambient_scope: Option<&str>,
     explicit_scope_arg: bool,
 ) -> &'a str {
-    if write_scope {
+    if write_scope || (settings.profile.allows_mutation() && !explicit_scope_arg) {
         WRITE_SCOPE
     } else if !explicit_scope_arg
         && ambient_scope.is_some_and(|scope| scope == settings.scope)
@@ -271,12 +271,7 @@ async fn build_auth_report(settings: &Settings, verify_token: bool) -> AuthRepor
             detected_auth_source = Some(client.auth_source());
             quota_project_configured = client.quota_project_configured();
             if verify_token {
-                match client.verify_token().await {
-                    Ok(()) => VerificationReport::Ok,
-                    Err(err) => VerificationReport::Failed {
-                        error: redact_secret_text(&err.to_string()),
-                    },
-                }
+                verify_client_ready(&client, settings).await
             } else {
                 VerificationReport::NotChecked
             }
@@ -315,6 +310,27 @@ async fn build_auth_report(settings: &Settings, verify_token: bool) -> AuthRepor
         ready,
         next_steps,
     }
+}
+
+async fn verify_client_ready(
+    client: &SearchConsoleClient,
+    settings: &Settings,
+) -> VerificationReport {
+    if let Err(err) = client.verify_token().await {
+        return VerificationReport::Failed {
+            error: redact_secret_text(&err.to_string()),
+        };
+    }
+
+    if (settings.profile.allows_mutation() || scope_allows_mutation(&settings.scope))
+        && let Err(err) = client.verify_required_scope(WRITE_SCOPE).await
+    {
+        return VerificationReport::Failed {
+            error: redact_secret_text(&err.to_string()),
+        };
+    }
+
+    VerificationReport::Ok
 }
 
 fn print_human_report(report: &AuthReport, doctor: bool) {
@@ -1005,6 +1021,28 @@ mod tests {
 
         assert_eq!(
             login_scope_from_env_hint(&settings, false, Some(WRITE_SCOPE), false),
+            DEFAULT_SCOPE
+        );
+    }
+
+    #[test]
+    fn login_scope_defaults_to_write_scope_for_operator_profile() {
+        let mut settings = test_settings(DEFAULT_SCOPE);
+        settings.profile = CapabilityProfile::Operator;
+
+        assert_eq!(
+            login_scope_from_env_hint(&settings, false, None, false),
+            WRITE_SCOPE
+        );
+    }
+
+    #[test]
+    fn login_scope_respects_explicit_scope_for_operator_profile() {
+        let mut settings = test_settings(DEFAULT_SCOPE);
+        settings.profile = CapabilityProfile::Operator;
+
+        assert_eq!(
+            login_scope_from_env_hint(&settings, false, None, true),
             DEFAULT_SCOPE
         );
     }

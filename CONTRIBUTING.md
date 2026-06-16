@@ -26,6 +26,7 @@ GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" cargo run --quiet -- auth comman
 if cargo run --quiet -- auth command --write-scope --scope "$custom_scope" >/tmp/gsc-auth-command.out 2>/tmp/gsc-auth-command.err; then echo 'expected --write-scope plus explicit --scope to fail' >&2; exit 1; fi
 grep -F -- '--write-scope' /tmp/gsc-auth-command.err >/dev/null
 cargo run --quiet -- auth command --write-scope | grep -Fx -- "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters'"
+cargo run --quiet -- --profile operator auth command | grep -Fx -- "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters'"
 cargo run --quiet -- auth command --client-id-file /tmp/client_id.json | grep -Fx -- "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly' --client-id-file /tmp/client_id.json"
 cargo run -- auth status --json | jq -e '.verification.status == "not_checked" and .ready == false'
 cargo run --quiet -- auth status --service-account-json-path /tmp/does-not-exist-google-search-console-mcp.json --json | jq -e '.verification.status == "config_error" and .credential_material_detected == false'

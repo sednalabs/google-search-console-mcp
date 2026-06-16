@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::{OnceCell, RwLock};
 
-use crate::config::Settings;
+use crate::config::{Settings, WRITE_SCOPE};
 use crate::error::SearchConsoleError;
 
 const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -43,6 +43,7 @@ const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b',')
     .add(b';')
     .add(b'=');
+const GOOGLE_TOKENINFO_URL: &str = "https://oauth2.googleapis.com/tokeninfo";
 
 #[derive(Debug, Clone, Deserialize)]
 struct OAuthClientSecretFile {
@@ -200,6 +201,20 @@ impl SearchConsoleClient {
 
     pub async fn verify_token(&self) -> Result<(), SearchConsoleError> {
         self.list_sites().await.map(|_| ())
+    }
+
+    pub async fn verify_required_scope(
+        &self,
+        required_scope: &str,
+    ) -> Result<(), SearchConsoleError> {
+        let scopes = self.access_token_scopes().await?;
+        if scopes.iter().any(|scope| scope == required_scope) {
+            Ok(())
+        } else {
+            Err(SearchConsoleError::AuthBootstrap(format!(
+                "active Google access token does not include required scope {required_scope}; run `google-search-console-mcp auth login --write-scope`, ensure the MCP launcher uses `--profile operator --scope {WRITE_SCOPE}` or matching environment variables, then restart long-lived MCP clients"
+            )))
+        }
     }
 
     pub async fn get_site(&self, site_url: &str) -> Result<Value, SearchConsoleError> {
@@ -522,6 +537,43 @@ impl SearchConsoleClient {
         }
     }
 
+    async fn access_token_scopes(&self) -> Result<Vec<String>, SearchConsoleError> {
+        let token = self.access_token().await?;
+        let response = self
+            .http
+            .get(GOOGLE_TOKENINFO_URL)
+            .query(&[("access_token", token)])
+            .send()
+            .await
+            .map_err(SearchConsoleError::Transport)?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(SearchConsoleError::Transport)?;
+
+        if !status.is_success() {
+            let message = String::from_utf8_lossy(&bytes).trim().to_string();
+            return Err(SearchConsoleError::UpstreamApi {
+                status: status.as_u16(),
+                message: if message.is_empty() {
+                    "tokeninfo scope check failed with no upstream response body".to_string()
+                } else {
+                    clip_message(format!("tokeninfo scope check failed: {message}"))
+                },
+            });
+        }
+
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(SearchConsoleError::UpstreamJson)?;
+        let scope = value.get("scope").and_then(Value::as_str).ok_or_else(|| {
+            SearchConsoleError::AuthBootstrap(
+                "Google tokeninfo response did not include granted scopes".to_string(),
+            )
+        })?;
+        Ok(parse_scope_list(scope))
+    }
+
     async fn refresh_oauth_access_token(
         &self,
         config: &OAuthRefreshConfig,
@@ -736,6 +788,14 @@ fn validate_dimensions(dimensions: &[String]) -> Result<(), SearchConsoleError> 
         seen.push(trimmed);
     }
     Ok(())
+}
+
+fn parse_scope_list(scope: &str) -> Vec<String> {
+    scope
+        .split([' ', ',', '\n', '\t'])
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn parse_https_upstream_url(raw: &str) -> Result<Url, SearchConsoleError> {
@@ -989,6 +1049,20 @@ mod tests {
             None
         );
         assert_eq!(parse_adc_quota_project_id("not-json"), None);
+    }
+
+    #[test]
+    fn parses_granted_scope_lists_from_google_tokeninfo() {
+        assert_eq!(
+            parse_scope_list(
+                "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/webmasters,https://www.googleapis.com/auth/userinfo.email"
+            ),
+            vec![
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/webmasters",
+                "https://www.googleapis.com/auth/userinfo.email"
+            ]
+        );
     }
 
     #[test]
