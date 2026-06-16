@@ -198,7 +198,10 @@ fn compact_search_analytics_response(
     let mut summary = Map::new();
     summary.insert("row_count".to_string(), json!(returned_rows));
     summary.insert("start_row".to_string(), json!(start_row));
-    summary.insert("requested_row_limit".to_string(), json!(requested_row_limit));
+    summary.insert(
+        "requested_row_limit".to_string(),
+        json!(requested_row_limit),
+    );
     summary.insert(
         "has_more_hint".to_string(),
         json!(next_start_row.is_some()),
@@ -218,7 +221,10 @@ fn compact_search_analytics_response(
         );
     }
 
-    let mut columns: Vec<Value> = dimensions.iter().map(|dimension| json!(dimension)).collect();
+    let mut columns: Vec<Value> = dimensions
+        .iter()
+        .map(|dimension| json!(dimension))
+        .collect();
     columns.extend(["clicks", "impressions", "ctr", "position"].map(|metric| json!(metric)));
 
     json!({
@@ -1005,12 +1011,18 @@ mod tests {
         assert_eq!(compact["summary"]["requested_row_limit"], json!(2));
         assert_eq!(compact["summary"]["next_start_row"], json!(6));
         assert_eq!(compact["summary"]["has_more_hint"], json!(true));
-        assert_eq!(compact["summary"]["response_aggregation_type"], json!("byPage"));
+        assert_eq!(
+            compact["summary"]["response_aggregation_type"],
+            json!("byPage")
+        );
         assert_eq!(
             compact["columns"],
             json!(["page", "query", "clicks", "impressions", "ctr", "position"])
         );
-        assert_eq!(compact["rows"][0]["page"], json!("https://www.example.com/a"));
+        assert_eq!(
+            compact["rows"][0]["page"],
+            json!("https://www.example.com/a")
+        );
         assert_eq!(compact["rows"][0]["query"], json!("rust mcp"));
         assert_eq!(compact["rows"][0]["clicks"], json!(12));
         assert_eq!(compact["rows"][0]["position"], json!(7.2));
