@@ -144,7 +144,7 @@ pub(crate) fn tool_inventory_policy_for_profile(profile: CapabilityProfile) -> T
     if profile.allows_mutation() {
         ToolInventoryPolicy::strict()
     } else {
-        ToolInventoryPolicy::strict_read_only()
+        ToolInventoryPolicy::strict().with_read_only_only(true)
     }
 }
 
