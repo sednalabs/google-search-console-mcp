@@ -792,13 +792,39 @@ fn next_steps(
     }
 }
 
+pub const GCLOUD_ADC_REQUIRED_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+
+pub fn adc_login_scopes(scope: &str) -> String {
+    let mut scopes = Vec::new();
+    let mut has_required_scope = false;
+
+    for item in scope
+        .split([',', ' ', '\n', '\t'])
+        .filter(|item| !item.is_empty())
+    {
+        if item == GCLOUD_ADC_REQUIRED_SCOPE {
+            has_required_scope = true;
+        }
+        if !scopes.iter().any(|existing| existing == &item) {
+            scopes.push(item);
+        }
+    }
+
+    if !has_required_scope {
+        scopes.insert(0, GCLOUD_ADC_REQUIRED_SCOPE);
+    }
+
+    scopes.join(",")
+}
+
 fn gcloud_login_args(scope: &str, headless: bool, client_id_file: Option<&Path>) -> Vec<String> {
+    let login_scopes = adc_login_scopes(scope);
     let mut args = vec![
         "gcloud".to_string(),
         "auth".to_string(),
         "application-default".to_string(),
         "login".to_string(),
-        format!("--scopes={scope}"),
+        format!("--scopes={login_scopes}"),
     ];
     if headless {
         args.push("--no-launch-browser".to_string());
@@ -903,7 +929,21 @@ mod tests {
 
         assert_eq!(
             login_command_for_scope(login_scope(&settings, false), false, None),
-            "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters.readonly"
+            "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly'"
+        );
+    }
+
+    #[test]
+    fn adc_login_scopes_include_gcloud_required_scope_once() {
+        assert_eq!(
+            adc_login_scopes(DEFAULT_SCOPE),
+            "https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly"
+        );
+        assert_eq!(
+            adc_login_scopes(
+                "https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/cloud-platform"
+            ),
+            "https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/cloud-platform"
         );
     }
 
@@ -986,7 +1026,7 @@ mod tests {
 
         assert_eq!(
             command,
-            "gcloud auth application-default login --scopes=https://www.googleapis.com/auth/webmasters --no-launch-browser --client-id-file '/tmp/client id.json'"
+            "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters' --no-launch-browser --client-id-file '/tmp/client id.json'"
         );
     }
 

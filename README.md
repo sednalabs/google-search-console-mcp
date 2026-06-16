@@ -90,7 +90,7 @@ Google requires a project-specific OAuth client:
 
 ```bash
 gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters.readonly
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
 ```
 
 Then restart any stdio MCP client that keeps long-lived child processes and call
@@ -137,8 +137,12 @@ Equivalent underlying command:
 
 ```bash
 gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters.readonly
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
 ```
+
+The `cloud-platform` scope is included because `gcloud auth application-default login` requires it
+when writing user credentials for ADC with explicit scopes. The MCP server still defaults to
+read-only Search Console access.
 
 With a project-specific OAuth client:
 

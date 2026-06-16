@@ -12,6 +12,9 @@ google-search-console-mcp auth status --verify-token
 Search Console scopes may require a Google OAuth client id file. If Google rejects the scope,
 create a Desktop OAuth client and rerun
 `google-search-console-mcp auth login --client-id-file /path/to/client_id.json`.
+The helper includes `https://www.googleapis.com/auth/cloud-platform` in the underlying ADC command
+because gcloud requires it for explicit Application Default Credentials scopes. The server runtime
+scope remains Search Console read-only unless you intentionally use operator mode.
 
 Use `google-search-console-mcp auth doctor` when credentials are not working. It reports the
 selected credential source, whether `gcloud` is available, whether the ADC file exists, and the
