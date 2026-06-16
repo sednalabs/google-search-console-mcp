@@ -1412,9 +1412,14 @@ mod tests {
         let read_only_names = registered_tool_names(CapabilityProfile::ReadOnly);
         assert!(!read_only_names.is_empty());
         assert!(!read_only_names.contains(&"gsc_sitemap_submit".to_string()));
+        assert!(!read_only_names.contains(&"gsc_scratchpad_set_runtime_limits".to_string()));
         assert!(
             registered_tool_names(CapabilityProfile::Operator)
                 .contains(&"gsc_sitemap_submit".to_string())
+        );
+        assert!(
+            registered_tool_names(CapabilityProfile::Operator)
+                .contains(&"gsc_scratchpad_set_runtime_limits".to_string())
         );
         assert!(
             registered_tool_schema_snapshot(CapabilityProfile::ReadOnly)

@@ -152,7 +152,7 @@ fn tool_capabilities() -> Vec<ToolCapability> {
         cap(
             "gsc_scratchpad_set_runtime_limits",
             "scratchpad",
-            true,
+            false,
             "Adjust scratchpad runtime session and table limits without restarting.",
             ["scratchpad", "limits", "quota", "runtime"],
         ),

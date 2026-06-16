@@ -207,6 +207,7 @@ mod tests {
         assert!(server.is_tool_allowed("gsc_search_analytics_query"));
         assert!(server.is_tool_allowed("gsc_scratchpad_query"));
         assert!(server.is_tool_allowed("gsc_scratchpad_ingest_search_analytics"));
+        assert!(!server.is_tool_allowed("gsc_scratchpad_set_runtime_limits"));
     }
 
     #[tokio::test]
@@ -224,6 +225,7 @@ mod tests {
         assert!(names.contains(&"gsc_scratchpad_ingest_search_analytics".to_string()));
         assert!(!names.contains(&"gsc_sitemap_submit".to_string()));
         assert!(!names.contains(&"gsc_site_delete".to_string()));
+        assert!(!names.contains(&"gsc_scratchpad_set_runtime_limits".to_string()));
     }
 
     #[tokio::test]
