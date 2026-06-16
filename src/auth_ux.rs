@@ -858,7 +858,8 @@ fn shell_command(args: &[String]) -> String {
 }
 
 fn shell_word(arg: &str) -> String {
-    if arg
+    if !arg.is_empty()
+        && arg
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '='))
     {
@@ -962,6 +963,11 @@ mod tests {
         } else {
             assert_eq!(gcloud_command(), "gcloud");
         }
+    }
+
+    #[test]
+    fn shell_word_quotes_empty_arguments() {
+        assert_eq!(shell_word(""), "''");
     }
 
     #[test]

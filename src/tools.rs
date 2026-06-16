@@ -202,10 +202,7 @@ fn compact_search_analytics_response(
         "requested_row_limit".to_string(),
         json!(requested_row_limit),
     );
-    summary.insert(
-        "has_more_hint".to_string(),
-        json!(next_start_row.is_some()),
-    );
+    summary.insert("has_more_hint".to_string(), json!(next_start_row.is_some()));
     if let Some(next_start_row) = next_start_row {
         summary.insert("next_start_row".to_string(), json!(next_start_row));
     }
