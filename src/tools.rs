@@ -66,19 +66,14 @@ pub struct AuthLoginCommandArgs {
     pub client_id_file: Option<String>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchAnalyticsResponseMode {
     /// Return the raw Google Search Console API response.
+    #[default]
     Raw,
     /// Return rows in a compact, export-friendly shape with paging receipts.
     Compact,
-}
-
-impl Default for SearchAnalyticsResponseMode {
-    fn default() -> Self {
-        Self::Raw
-    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

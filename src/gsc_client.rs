@@ -895,14 +895,14 @@ fn adc_credentials_path() -> Option<PathBuf> {
         return Some(PathBuf::from(config).join("application_default_credentials.json"));
     }
 
-    if cfg!(windows) {
-        if let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty()) {
-            return Some(
-                PathBuf::from(appdata)
-                    .join("gcloud")
-                    .join("application_default_credentials.json"),
-            );
-        }
+    if cfg!(windows)
+        && let Some(appdata) = env::var_os("APPDATA").filter(|value| !value.is_empty())
+    {
+        return Some(
+            PathBuf::from(appdata)
+                .join("gcloud")
+                .join("application_default_credentials.json"),
+        );
     }
 
     env::var_os("HOME")
