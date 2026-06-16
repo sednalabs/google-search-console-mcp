@@ -1434,7 +1434,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-core"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=0aa0984bf59e6bcfa16a97dadafeabd9eae559bc#0aa0984bf59e6bcfa16a97dadafeabd9eae559bc"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6f90c6525b7648ab09596fe3bb357d995368678c#6f90c6525b7648ab09596fe3bb357d995368678c"
 dependencies = [
  "rmcp",
  "serde",
@@ -1444,7 +1444,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-observability"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=0aa0984bf59e6bcfa16a97dadafeabd9eae559bc#0aa0984bf59e6bcfa16a97dadafeabd9eae559bc"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6f90c6525b7648ab09596fe3bb357d995368678c#6f90c6525b7648ab09596fe3bb357d995368678c"
 dependencies = [
  "once_cell",
  "regex",
@@ -1457,7 +1457,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-policy-core"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=0aa0984bf59e6bcfa16a97dadafeabd9eae559bc#0aa0984bf59e6bcfa16a97dadafeabd9eae559bc"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6f90c6525b7648ab09596fe3bb357d995368678c#6f90c6525b7648ab09596fe3bb357d995368678c"
 dependencies = [
  "regex",
  "serde",
@@ -1467,7 +1467,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-scratchpad"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=0aa0984bf59e6bcfa16a97dadafeabd9eae559bc#0aa0984bf59e6bcfa16a97dadafeabd9eae559bc"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=6f90c6525b7648ab09596fe3bb357d995368678c#6f90c6525b7648ab09596fe3bb357d995368678c"
 dependencies = [
  "duckdb",
  "mcp-toolkit-observability",
