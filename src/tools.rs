@@ -2,6 +2,10 @@ use std::time::Instant;
 
 use mcp_toolkit_core::tool_inventory::{ToolOperation, ToolSearchFilter, ToolSearchResponse};
 use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
+use mcp_toolkit_scratchpad::{
+    ScratchpadIngestColumn, ScratchpadIngestMode, ScratchpadQueryProjection,
+    ScratchpadSessionInfo, ScratchpadTableInfo,
+};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
 use rmcp::tool;
@@ -17,6 +21,7 @@ use crate::config::{
     CapabilityProfile, DEFAULT_SCOPE, WRITE_SCOPE, scope_allows_mutation, scope_allows_read,
 };
 use crate::contract;
+use crate::error::SearchConsoleError;
 use crate::gsc_client::{AuthSource, SearchAnalyticsRequest};
 use crate::server::{SearchConsoleMcp, tool_inventory_policy_for_profile};
 use crate::tool_surface::build_tool_inventory;
@@ -108,6 +113,101 @@ pub struct SearchAnalyticsQueryArgs {
     /// Response shape. Use compact for agent-friendly batch evidence rows.
     #[serde(default)]
     pub response_mode: SearchAnalyticsResponseMode,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadSessionArgs {
+    /// Scratchpad session id. Use a short stable name for the current analysis thread.
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadListSessionsArgs {
+    /// Maximum sessions to return, 1..100.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadListTablesArgs {
+    /// Scratchpad session id.
+    pub session_id: String,
+    /// Maximum tables to return, 1..100.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadQueryArgs {
+    /// Scratchpad session id.
+    pub session_id: String,
+    /// Read-only DuckDB SQL. SELECT/WITH are paginated; DESCRIBE/SUMMARIZE are allowed helpers.
+    pub sql: String,
+    /// Zero-based row offset.
+    #[serde(default)]
+    pub offset: Option<u64>,
+    /// Maximum rows to return, 1..1,000.
+    #[serde(default)]
+    pub page_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadDropTableArgs {
+    /// Scratchpad session id.
+    pub session_id: String,
+    /// Scratchpad table name.
+    pub table_name: String,
+    /// Return success when the table is already absent.
+    #[serde(default)]
+    pub if_exists: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadRuntimeLimitsArgs {
+    /// Optional replacement maximum active sessions.
+    #[serde(default)]
+    pub max_sessions: Option<usize>,
+    /// Optional replacement maximum tables per session.
+    #[serde(default)]
+    pub max_tables_per_session: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScratchpadIngestSearchAnalyticsArgs {
+    /// Scratchpad session id. Opened automatically when missing.
+    pub session_id: String,
+    /// Destination table name. Must use [A-Za-z0-9_] and start with a letter or underscore.
+    pub table_name: String,
+    /// Append to an existing table instead of creating a new table.
+    #[serde(default)]
+    pub append: bool,
+    /// Search Console property URL, for example `https://www.example.com/` or `sc-domain:example.com`.
+    pub site_url: String,
+    /// Start date in YYYY-MM-DD format, in Search Console's Pacific Time reporting calendar.
+    pub start_date: String,
+    /// End date in YYYY-MM-DD format, in Search Console's Pacific Time reporting calendar.
+    pub end_date: String,
+    /// Optional dimensions such as query, page, country, device, date, hour, or searchAppearance.
+    #[serde(default)]
+    pub dimensions: Vec<String>,
+    /// Optional Search Console type: web, image, video, news, googleNews, or discover.
+    #[serde(default)]
+    pub search_type: Option<String>,
+    /// Optional official dimensionFilterGroups structure. snake_case keys are converted to camelCase.
+    #[serde(default)]
+    pub dimension_filter_groups: Option<Value>,
+    /// Optional aggregation type: auto, byPage, byProperty, or byNewsShowcasePanel.
+    #[serde(default)]
+    pub aggregation_type: Option<String>,
+    /// Maximum rows to ingest, 1..25,000 by default configuration.
+    #[serde(default)]
+    pub row_limit: Option<u32>,
+    /// Zero-based first row offset for paging.
+    #[serde(default)]
+    pub start_row: Option<u32>,
+    /// Optional data state: final, all, or hourly_all.
+    #[serde(default)]
+    pub data_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -252,6 +352,181 @@ fn compact_search_analytics_row(row: &Value, dimensions: &[String]) -> Value {
     Value::Object(compact)
 }
 
+fn search_analytics_request_from_scratchpad_args(
+    args: ScratchpadIngestSearchAnalyticsArgs,
+) -> SearchAnalyticsRequest {
+    SearchAnalyticsRequest {
+        site_url: args.site_url,
+        start_date: args.start_date,
+        end_date: args.end_date,
+        dimensions: args.dimensions,
+        search_type: args.search_type,
+        dimension_filter_groups: args.dimension_filter_groups,
+        aggregation_type: args.aggregation_type,
+        row_limit: args.row_limit,
+        start_row: args.start_row,
+        data_state: args.data_state,
+    }
+}
+
+fn search_analytics_ingest_columns(dimensions: &[String]) -> Vec<ScratchpadIngestColumn> {
+    let mut columns = dimensions
+        .iter()
+        .map(|dimension| ScratchpadIngestColumn {
+            name: normalize_scratchpad_column_name(dimension),
+            logical_type: search_analytics_dimension_logical_type(dimension).to_string(),
+        })
+        .collect::<Vec<_>>();
+    columns.extend([
+        ScratchpadIngestColumn {
+            name: "clicks".to_string(),
+            logical_type: "integer".to_string(),
+        },
+        ScratchpadIngestColumn {
+            name: "impressions".to_string(),
+            logical_type: "integer".to_string(),
+        },
+        ScratchpadIngestColumn {
+            name: "ctr".to_string(),
+            logical_type: "number".to_string(),
+        },
+        ScratchpadIngestColumn {
+            name: "position".to_string(),
+            logical_type: "number".to_string(),
+        },
+    ]);
+    columns
+}
+
+fn search_analytics_dimension_logical_type(dimension: &str) -> &'static str {
+    match dimension {
+        "date" => "date",
+        "hour" => "integer",
+        _ => "string",
+    }
+}
+
+fn search_analytics_rows_for_scratchpad(
+    value: &Value,
+    dimensions: &[String],
+) -> Vec<Map<String, Value>> {
+    value
+        .get("rows")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .map(|row| search_analytics_row_for_scratchpad(row, dimensions))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn search_analytics_row_for_scratchpad(row: &Value, dimensions: &[String]) -> Map<String, Value> {
+    let keys = row
+        .get("keys")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut projected = Map::new();
+    for (index, dimension) in dimensions.iter().enumerate() {
+        projected.insert(
+            normalize_scratchpad_column_name(dimension),
+            keys.get(index).cloned().unwrap_or(Value::Null),
+        );
+    }
+    for metric in ["clicks", "impressions", "ctr", "position"] {
+        projected.insert(
+            metric.to_string(),
+            row.get(metric).cloned().unwrap_or(Value::Null),
+        );
+    }
+    projected
+}
+
+fn normalize_scratchpad_column_name(value: &str) -> String {
+    let mut normalized = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            normalized.push(ch.to_ascii_lowercase());
+        } else {
+            normalized.push('_');
+        }
+    }
+    let normalized = normalized.trim_matches('_');
+    if normalized.is_empty() {
+        return "column".to_string();
+    }
+    if normalized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_digit())
+    {
+        format!("col_{normalized}")
+    } else {
+        normalized.to_string()
+    }
+}
+
+fn scratchpad_projection_value(
+    projection: ScratchpadQueryProjection,
+    session_id: &str,
+    offset: u64,
+    page_size: u64,
+) -> Value {
+    let row_count_returned = projection.rows.len();
+    let next_offset = offset.saturating_add(row_count_returned as u64);
+    let next_offset = if (next_offset as usize) < projection.row_count_total {
+        Some(next_offset)
+    } else {
+        None
+    };
+    json!({
+        "session_id": session_id,
+        "summary": {
+            "row_count_total": projection.row_count_total,
+            "row_count_returned": row_count_returned,
+            "offset": offset,
+            "page_size": page_size,
+            "has_more": next_offset.is_some(),
+            "next_offset": next_offset,
+            "pagination_mode": projection.pagination_mode,
+            "query_hints": projection.query_hints,
+        },
+        "columns": projection.columns.into_iter().map(scratchpad_column_value).collect::<Vec<_>>(),
+        "rows": projection.rows,
+    })
+}
+
+fn scratchpad_session_value(info: ScratchpadSessionInfo) -> Value {
+    json!({
+        "session_id": info.session_id,
+        "tables_used": info.tables_used,
+        "tables_remaining": info.tables_remaining,
+        "rows_used": info.rows_used,
+        "rows_remaining": info.rows_remaining,
+        "ttl_seconds_remaining": info.ttl_seconds_remaining,
+    })
+}
+
+fn scratchpad_table_value(table: ScratchpadTableInfo) -> Value {
+    json!({
+        "schema": table.schema,
+        "name": table.name,
+        "table_type": table.table_type,
+        "column_count": table.column_count,
+        "columns_truncated": table.columns_truncated,
+        "columns": table.columns.into_iter().map(scratchpad_column_value).collect::<Vec<_>>(),
+    })
+}
+
+fn scratchpad_column_value(column: mcp_toolkit_scratchpad::ScratchpadTableColumnInfo) -> Value {
+    json!({
+        "name": column.name,
+        "logical_type": column.logical_type,
+        "nullable": column.nullable,
+    })
+}
+
 #[tool_router(router = tool_router_search_console, vis = "pub")]
 impl SearchConsoleMcp {
     /// Search tools for OpenAI tool_search and deferred-loading clients.
@@ -353,6 +628,8 @@ impl SearchConsoleMcp {
                 "safe_starter_tools": [
                     "gsc_sites_list",
                     "gsc_search_analytics_query",
+                    "gsc_scratchpad_ingest_search_analytics",
+                    "gsc_scratchpad_query",
                     "gsc_url_inspection_index_inspect",
                     "gsc_sitemaps_list"
                 ],
@@ -536,6 +813,293 @@ impl SearchConsoleMcp {
                 Ok(contract::success(value, started))
             }
             Err(err) => Ok(contract::error(err, started)),
+        }
+    }
+
+    /// Open or refresh a scratchpad session.
+    #[tool(
+        name = "gsc_scratchpad_open_session",
+        description = "Open or refresh a bounded DuckDB scratchpad session for local Search Console analysis."
+    )]
+    async fn gsc_scratchpad_open_session(
+        &self,
+        Parameters(args): Parameters<ScratchpadSessionArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        match self.scratchpad_sessions.open_session(&args.session_id) {
+            Ok(info) => Ok(contract::success(scratchpad_session_value(info), started)),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
+        }
+    }
+
+    /// Release a scratchpad session and delete its local DuckDB file.
+    #[tool(
+        name = "gsc_scratchpad_release_session",
+        description = "Release a scratchpad session and delete its local DuckDB data."
+    )]
+    async fn gsc_scratchpad_release_session(
+        &self,
+        Parameters(args): Parameters<ScratchpadSessionArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        match self.scratchpad_sessions.release_session(&args.session_id) {
+            Ok(released) => Ok(contract::success(
+                json!({
+                    "session_id": args.session_id,
+                    "released": released,
+                }),
+                started,
+            )),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
+        }
+    }
+
+    /// List active scratchpad sessions.
+    #[tool(
+        name = "gsc_scratchpad_list_sessions",
+        description = "List active bounded DuckDB scratchpad sessions."
+    )]
+    async fn gsc_scratchpad_list_sessions(
+        &self,
+        Parameters(args): Parameters<ScratchpadListSessionsArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        let limit = args.limit.unwrap_or(20).clamp(1, 100);
+        match self.scratchpad_sessions.list_sessions(limit) {
+            Ok(sessions) => Ok(contract::success(
+                json!({
+                    "sessions": sessions.into_iter().map(scratchpad_session_value).collect::<Vec<_>>(),
+                    "limit": limit,
+                }),
+                started,
+            )),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
+        }
+    }
+
+    /// List scratchpad tables for one session.
+    #[tool(
+        name = "gsc_scratchpad_list_tables",
+        description = "List tables and column previews for one scratchpad session."
+    )]
+    async fn gsc_scratchpad_list_tables(
+        &self,
+        Parameters(args): Parameters<ScratchpadListTablesArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        let limit = args.limit.unwrap_or(50).clamp(1, 100);
+        match self.scratchpad_sessions.list_tables(&args.session_id, limit) {
+            Ok(tables) => Ok(contract::success(
+                json!({
+                    "session_id": args.session_id,
+                    "tables": tables.into_iter().map(scratchpad_table_value).collect::<Vec<_>>(),
+                    "limit": limit,
+                }),
+                started,
+            )),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
+        }
+    }
+
+    /// Query scratchpad tables with restricted read-only SQL.
+    #[tool(
+        name = "gsc_scratchpad_query",
+        description = "Run read-only DuckDB SQL against a scratchpad session and return a bounded page of rows."
+    )]
+    async fn gsc_scratchpad_query(
+        &self,
+        Parameters(args): Parameters<ScratchpadQueryArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        let offset = args.offset.unwrap_or(0);
+        let page_size = args.page_size.unwrap_or(100).clamp(1, 1_000);
+        match self
+            .scratchpad_sessions
+            .query_rows(&args.session_id, &args.sql, offset, page_size)
+        {
+            Ok(projection) => Ok(contract::success(
+                scratchpad_projection_value(projection, &args.session_id, offset, page_size),
+                started,
+            )),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
+        }
+    }
+
+    /// Drop one scratchpad table.
+    #[tool(
+        name = "gsc_scratchpad_drop_table",
+        description = "Drop a table from a scratchpad session and update local row/table accounting."
+    )]
+    async fn gsc_scratchpad_drop_table(
+        &self,
+        Parameters(args): Parameters<ScratchpadDropTableArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        match self.scratchpad_sessions.drop_table(
+            &args.session_id,
+            &args.table_name,
+            args.if_exists,
+        ) {
+            Ok(stats) => Ok(contract::success(
+                json!({
+                    "session_id": args.session_id,
+                    "table_name": args.table_name,
+                    "dropped": stats.dropped,
+                    "rows_removed": stats.rows_removed,
+                    "session_snapshot": {
+                        "tables_used": stats.session_snapshot.tables_used,
+                        "tables_remaining": stats.session_snapshot.tables_remaining,
+                        "rows_used": stats.session_snapshot.rows_used,
+                        "rows_remaining": stats.session_snapshot.rows_remaining,
+                    },
+                }),
+                started,
+            )),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
+        }
+    }
+
+    /// Return scratchpad runtime limits.
+    #[tool(
+        name = "gsc_scratchpad_get_runtime_limits",
+        description = "Return configured and current runtime limits for scratchpad sessions."
+    )]
+    async fn gsc_scratchpad_get_runtime_limits(&self) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        let config = self.scratchpad_sessions.config();
+        Ok(contract::success(
+            json!({
+                "session_ttl_secs": config.session_ttl.as_secs(),
+                "max_sessions": self.scratchpad_sessions.max_sessions_limit(),
+                "configured_max_sessions": config.max_sessions,
+                "max_tables_per_session": self.scratchpad_sessions.max_tables_per_session_limit(),
+                "configured_max_tables_per_session": config.max_tables_per_session,
+                "max_rows_per_session": config.max_rows_per_session,
+                "max_memory_mb": config.max_memory_mb,
+                "query_timeout_ms": config.query_timeout.as_millis(),
+                "max_sql_bytes": config.max_sql_bytes,
+                "root_dir": config.root_dir.display().to_string(),
+            }),
+            started,
+        ))
+    }
+
+    /// Adjust scratchpad runtime session/table limits.
+    #[tool(
+        name = "gsc_scratchpad_set_runtime_limits",
+        description = "Adjust scratchpad runtime session and table limits without restarting the server."
+    )]
+    async fn gsc_scratchpad_set_runtime_limits(
+        &self,
+        Parameters(args): Parameters<ScratchpadRuntimeLimitsArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        if let Some(max_sessions) = args.max_sessions {
+            if let Err(err) = self
+                .scratchpad_sessions
+                .set_max_sessions_limit(max_sessions)
+            {
+                return Ok(contract::error(SearchConsoleError::from(err), started));
+            }
+        }
+        if let Some(max_tables_per_session) = args.max_tables_per_session {
+            if let Err(err) = self
+                .scratchpad_sessions
+                .set_max_tables_per_session_limit(max_tables_per_session)
+            {
+                return Ok(contract::error(SearchConsoleError::from(err), started));
+            }
+        }
+        Ok(contract::success(
+            json!({
+                "max_sessions": self.scratchpad_sessions.max_sessions_limit(),
+                "max_tables_per_session": self.scratchpad_sessions.max_tables_per_session_limit(),
+            }),
+            started,
+        ))
+    }
+
+    /// Ingest Search Analytics rows into a scratchpad table.
+    #[tool(
+        name = "gsc_scratchpad_ingest_search_analytics",
+        description = "Query Search Console Search Analytics and ingest the returned rows into a bounded DuckDB scratchpad table."
+    )]
+    async fn gsc_scratchpad_ingest_search_analytics(
+        &self,
+        Parameters(args): Parameters<ScratchpadIngestSearchAnalyticsArgs>,
+    ) -> Result<CallToolResult, crate::McpError> {
+        let started = Instant::now();
+        let session_id = args.session_id.clone();
+        let table_name = args.table_name.clone();
+        let append = args.append;
+        let site_url = args.site_url.clone();
+        let start_date = args.start_date.clone();
+        let end_date = args.end_date.clone();
+        let dimensions = args.dimensions.clone();
+        let row_limit = args.row_limit;
+        let requested_row_limit = row_limit.unwrap_or(1_000);
+        let start_row = args.start_row.unwrap_or(0);
+        let request = search_analytics_request_from_scratchpad_args(args);
+        let upstream = match self.client.search_analytics_query(request).await {
+            Ok(value) => value,
+            Err(err) => return Ok(contract::error(err, started)),
+        };
+        let columns = search_analytics_ingest_columns(&dimensions);
+        let rows = search_analytics_rows_for_scratchpad(&upstream, &dimensions);
+        let mode = if append {
+            ScratchpadIngestMode::Append
+        } else {
+            ScratchpadIngestMode::Create
+        };
+        if let Err(err) = self.scratchpad_sessions.open_session(&session_id) {
+            return Ok(contract::error(SearchConsoleError::from(err), started));
+        }
+        match self.scratchpad_sessions.ingest_rows_with_mode(
+            &session_id,
+            &table_name,
+            &columns,
+            &rows,
+            mode,
+        ) {
+            Ok(stats) => Ok(contract::success(
+                json!({
+                    "session_id": session_id,
+                    "table_name": table_name,
+                    "mode": if append { "append" } else { "create" },
+                    "rows_inserted": stats.rows_inserted,
+                    "columns_inserted": stats.columns_inserted,
+                    "columns": columns.into_iter().map(|column| {
+                        json!({
+                            "name": column.name,
+                            "logical_type": column.logical_type,
+                        })
+                    }).collect::<Vec<_>>(),
+                    "source": {
+                        "site_url": site_url,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "dimensions": dimensions,
+                        "start_row": start_row,
+                        "requested_row_limit": requested_row_limit,
+                        "has_more_hint": requested_row_limit > 0
+                            && stats.rows_inserted as u32 == requested_row_limit,
+                        "next_start_row": if requested_row_limit > 0
+                            && stats.rows_inserted as u32 == requested_row_limit {
+                            Some(start_row.saturating_add(stats.rows_inserted as u32))
+                        } else {
+                            None
+                        },
+                    },
+                    "session_snapshot": {
+                        "tables_used": stats.session_snapshot.tables_used,
+                        "tables_remaining": stats.session_snapshot.tables_remaining,
+                        "rows_used": stats.session_snapshot.rows_used,
+                        "rows_remaining": stats.session_snapshot.rows_remaining,
+                    },
+                }),
+                started,
+            )),
+            Err(err) => Ok(contract::error(SearchConsoleError::from(err), started)),
         }
     }
 

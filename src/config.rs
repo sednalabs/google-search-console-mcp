@@ -13,6 +13,13 @@ const DEFAULT_API_BASE_URL: &str = "https://www.googleapis.com/webmasters/v3";
 const DEFAULT_INSPECTION_BASE_URL: &str = "https://searchconsole.googleapis.com/v1";
 const DEFAULT_HTTP_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_MAX_ROW_LIMIT: u32 = 25_000;
+pub const DEFAULT_SCRATCHPAD_SESSION_TTL_SECS: u64 = 900;
+pub const DEFAULT_SCRATCHPAD_MAX_SESSIONS: usize = 64;
+pub const DEFAULT_SCRATCHPAD_MAX_TABLES_PER_SESSION: usize = 32;
+pub const DEFAULT_SCRATCHPAD_MAX_ROWS_PER_SESSION: usize = 1_000_000;
+pub const DEFAULT_SCRATCHPAD_MAX_MEMORY_MB: usize = 256;
+pub const DEFAULT_SCRATCHPAD_QUERY_TIMEOUT_MS: u64 = 15_000;
+pub const DEFAULT_SCRATCHPAD_MAX_SQL_BYTES: usize = 65_536;
 const DEFAULT_USER_AGENT: &str = "google-search-console-mcp/0.1.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -142,6 +149,77 @@ pub struct Cli {
     )]
     pub max_row_limit: u32,
 
+    /// Optional root directory for DuckDB scratchpad session files.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR",
+        global = true
+    )]
+    pub scratchpad_root_dir: Option<PathBuf>,
+
+    /// Scratchpad session time-to-live in seconds.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_SESSION_TTL_SECS
+    )]
+    pub scratchpad_session_ttl_secs: u64,
+
+    /// Maximum active scratchpad sessions.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_SESSIONS
+    )]
+    pub scratchpad_max_sessions: usize,
+
+    /// Maximum scratchpad tables per session.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_TABLES_PER_SESSION
+    )]
+    pub scratchpad_max_tables_per_session: usize,
+
+    /// Maximum scratchpad rows per session.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_ROWS_PER_SESSION",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_ROWS_PER_SESSION
+    )]
+    pub scratchpad_max_rows_per_session: usize,
+
+    /// Maximum DuckDB memory budget per scratchpad session in MiB.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_MEMORY_MB",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_MEMORY_MB
+    )]
+    pub scratchpad_max_memory_mb: usize,
+
+    /// Scratchpad SQL query timeout in milliseconds.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_QUERY_TIMEOUT_MS",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_QUERY_TIMEOUT_MS
+    )]
+    pub scratchpad_query_timeout_ms: u64,
+
+    /// Maximum scratchpad SQL payload size in bytes.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SQL_BYTES",
+        global = true,
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_SQL_BYTES
+    )]
+    pub scratchpad_max_sql_bytes: usize,
+
     /// Print registered tool names and exit.
     #[arg(long)]
     pub print_tools: bool,
@@ -255,6 +333,14 @@ pub struct Settings {
     pub service_account_json: Option<String>,
     pub quota_project: Option<String>,
     pub max_row_limit: u32,
+    pub scratchpad_root_dir: Option<PathBuf>,
+    pub scratchpad_session_ttl: Duration,
+    pub scratchpad_max_sessions: usize,
+    pub scratchpad_max_tables_per_session: usize,
+    pub scratchpad_max_rows_per_session: usize,
+    pub scratchpad_max_memory_mb: usize,
+    pub scratchpad_query_timeout: Duration,
+    pub scratchpad_max_sql_bytes: usize,
     pub print_tools: bool,
     pub print_tool_schema: bool,
     pub command: Option<CliCommand>,
@@ -270,6 +356,31 @@ impl Settings {
                 "max row limit must be between 1 and {DEFAULT_MAX_ROW_LIMIT}"
             ));
         }
+        if cli.scratchpad_session_ttl_secs == 0 {
+            return Err(anyhow!("scratchpad session ttl must be positive"));
+        }
+        if cli.scratchpad_max_sessions == 0 {
+            return Err(anyhow!("scratchpad max sessions must be positive"));
+        }
+        if cli.scratchpad_max_tables_per_session == 0 {
+            return Err(anyhow!(
+                "scratchpad max tables per session must be positive"
+            ));
+        }
+        if cli.scratchpad_max_rows_per_session == 0 {
+            return Err(anyhow!(
+                "scratchpad max rows per session must be positive"
+            ));
+        }
+        if cli.scratchpad_max_memory_mb == 0 {
+            return Err(anyhow!("scratchpad max memory must be positive"));
+        }
+        if cli.scratchpad_query_timeout_ms == 0 {
+            return Err(anyhow!("scratchpad query timeout must be positive"));
+        }
+        if cli.scratchpad_max_sql_bytes == 0 {
+            return Err(anyhow!("scratchpad max sql bytes must be positive"));
+        }
         Ok(Self {
             profile: cli.profile,
             scope: cli.scope,
@@ -283,6 +394,14 @@ impl Settings {
             service_account_json: cli.service_account_json,
             quota_project: cli.quota_project,
             max_row_limit: cli.max_row_limit,
+            scratchpad_root_dir: cli.scratchpad_root_dir,
+            scratchpad_session_ttl: Duration::from_secs(cli.scratchpad_session_ttl_secs),
+            scratchpad_max_sessions: cli.scratchpad_max_sessions,
+            scratchpad_max_tables_per_session: cli.scratchpad_max_tables_per_session,
+            scratchpad_max_rows_per_session: cli.scratchpad_max_rows_per_session,
+            scratchpad_max_memory_mb: cli.scratchpad_max_memory_mb,
+            scratchpad_query_timeout: Duration::from_millis(cli.scratchpad_query_timeout_ms),
+            scratchpad_max_sql_bytes: cli.scratchpad_max_sql_bytes,
             print_tools: cli.print_tools,
             print_tool_schema: cli.print_tool_schema,
             command: cli.command,

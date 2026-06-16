@@ -27,6 +27,9 @@ pub enum SearchConsoleError {
 
     #[error("tool '{tool}' is blocked by capability profile '{profile}'")]
     PolicyDenied { profile: String, tool: String },
+
+    #[error(transparent)]
+    Scratchpad(#[from] mcp_toolkit_scratchpad::ScratchpadError),
 }
 
 impl SearchConsoleError {
@@ -53,6 +56,7 @@ impl SearchConsoleError {
             Self::UpstreamApi { status, .. } if *status >= 500 => "UPSTREAM_UNAVAILABLE",
             Self::UpstreamApi { .. } => "UPSTREAM_REJECTED",
             Self::PolicyDenied { .. } => "POLICY_DENIED",
+            Self::Scratchpad(err) => err.code(),
         }
     }
 
@@ -65,6 +69,7 @@ impl SearchConsoleError {
             Self::UpstreamApi { status, .. } if *status >= 500 => "upstream_unavailable",
             Self::UpstreamApi { .. } => "upstream_rejected",
             Self::PolicyDenied { .. } => "policy_denied",
+            Self::Scratchpad(err) => err.reason(),
         }
     }
 
@@ -76,6 +81,7 @@ impl SearchConsoleError {
             Self::UpstreamJson(_) => "upstream_parse",
             Self::UpstreamApi { .. } => "upstream_api",
             Self::PolicyDenied { .. } => "policy",
+            Self::Scratchpad(err) => err.category(),
         }
     }
 
@@ -102,6 +108,7 @@ impl SearchConsoleError {
             Self::PolicyDenied { .. } => Some(
                 "Switch capability profile to operator only for intentional sitemap/site mutations.",
             ),
+            Self::Scratchpad(err) => err.hint(),
         }
     }
 }

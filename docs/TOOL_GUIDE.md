@@ -74,6 +74,52 @@ not provide live indexability testing through this method.
 
 Use `gsc_sitemaps_list` and `gsc_sitemap_get` to inspect submitted sitemap metadata.
 
+## Scratchpad Tools
+
+Use scratchpad tools when Search Analytics batches are too large to keep returning through the MCP
+transcript. Scratchpad tools are available in the default `read_only` profile because they only write
+to a local bounded DuckDB session, not to Google Search Console.
+
+Start by ingesting one Search Analytics page into a table:
+
+```json
+{
+  "session_id": "seo_batch",
+  "table_name": "may_pages",
+  "site_url": "https://www.example.com/",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-31",
+  "dimensions": ["page", "query"],
+  "row_limit": 25000
+}
+```
+
+Then query the local table with restricted read-only SQL:
+
+```json
+{
+  "session_id": "seo_batch",
+  "sql": "SELECT page, SUM(clicks) AS clicks, SUM(impressions) AS impressions FROM may_pages GROUP BY page ORDER BY impressions DESC",
+  "page_size": 100
+}
+```
+
+Available scratchpad tools:
+
+- `gsc_scratchpad_open_session`
+- `gsc_scratchpad_release_session`
+- `gsc_scratchpad_list_sessions`
+- `gsc_scratchpad_list_tables`
+- `gsc_scratchpad_query`
+- `gsc_scratchpad_drop_table`
+- `gsc_scratchpad_get_runtime_limits`
+- `gsc_scratchpad_set_runtime_limits`
+- `gsc_scratchpad_ingest_search_analytics`
+
+Scratchpad SQL allows read-only `SELECT` and `WITH` queries plus DuckDB `DESCRIBE` and `SUMMARIZE`
+helpers. It denies mutating statements, multiple statements, extension loading, and file/external
+scan primitives.
+
 ## Operator Tools
 
 The following tools are blocked unless `GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator`:

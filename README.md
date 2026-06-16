@@ -9,6 +9,7 @@ The first release focuses on direct, low-overhead access to the official Search 
 - query Search Analytics performance data
 - inspect URL indexing status
 - list and retrieve sitemap metadata
+- ingest Search Analytics rows into a bounded local DuckDB scratchpad for agent-friendly analysis
 - submit/delete sitemaps and add/remove sites only when the operator profile is enabled
 - expose `find_tools` metadata for deferred-loading and tool-search clients
 
@@ -206,6 +207,14 @@ mount a file and can provide the JSON as a sealed secret.
 | `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | ADC `quota_project_id`, when present | Optional `x-goog-user-project` header override |
 | `GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS` | `15000` | Upstream request timeout |
 | `GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT` | `25000` | Maximum Search Analytics `rowLimit` |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR` | OS temp dir | Optional DuckDB scratchpad file root |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS` | `900` | Scratchpad session lifetime |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS` | `64` | Maximum active scratchpad sessions |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION` | `32` | Maximum scratchpad tables per session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_ROWS_PER_SESSION` | `1000000` | Maximum scratchpad rows per session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_MEMORY_MB` | `256` | DuckDB memory limit per scratchpad session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_QUERY_TIMEOUT_MS` | `15000` | Scratchpad SQL query timeout |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SQL_BYTES` | `65536` | Maximum scratchpad SQL payload size |
 
 ## Tools
 
@@ -216,6 +225,15 @@ mount a file and can provide the JSON as a sealed secret.
 - `gsc_sites_list`
 - `gsc_site_get`
 - `gsc_search_analytics_query`
+- `gsc_scratchpad_open_session`
+- `gsc_scratchpad_release_session`
+- `gsc_scratchpad_list_sessions`
+- `gsc_scratchpad_list_tables`
+- `gsc_scratchpad_query`
+- `gsc_scratchpad_drop_table`
+- `gsc_scratchpad_get_runtime_limits`
+- `gsc_scratchpad_set_runtime_limits`
+- `gsc_scratchpad_ingest_search_analytics`
 - `gsc_url_inspection_index_inspect`
 - `gsc_sitemaps_list`
 - `gsc_sitemap_get`
@@ -263,3 +281,33 @@ Compact Search Analytics responses include:
 - `summary.row_count`, `summary.start_row`, `summary.requested_row_limit`, and `summary.next_start_row`
 - `columns`, combining the requested dimensions with `clicks`, `impressions`, `ctr`, and `position`
 - `rows`, where each row is keyed by dimension name plus the standard Search Analytics metrics
+
+For larger evidence passes, use the scratchpad tools instead of returning every raw row through the
+chat transcript. Scratchpad tools are available in the default `read_only` profile because they only
+write to a local bounded DuckDB session, not to Google Search Console.
+
+```json
+{
+  "session_id": "seo_batch",
+  "table_name": "may_pages",
+  "site_url": "https://www.example.com/",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-31",
+  "dimensions": ["page", "query"],
+  "row_limit": 25000
+}
+```
+
+Then query the local table with restricted read-only SQL:
+
+```json
+{
+  "session_id": "seo_batch",
+  "sql": "SELECT page, SUM(clicks) AS clicks, SUM(impressions) AS impressions FROM may_pages GROUP BY page ORDER BY impressions DESC",
+  "page_size": 100
+}
+```
+
+Scratchpad SQL allows read-only `SELECT` and `WITH` queries plus DuckDB `DESCRIBE` and `SUMMARIZE`
+helpers. It denies mutating statements, multiple statements, extension loading, and file/external
+scan primitives.
