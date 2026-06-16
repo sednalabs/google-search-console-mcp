@@ -11,9 +11,9 @@ readme = "README.md"
 anyhow = "1.0.102"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 gcp_auth = "0.12.6"
-mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "697d903721d725945251acd87217e17dd929dadb", package = "mcp-toolkit-core" }
-mcp-toolkit-observability = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "697d903721d725945251acd87217e17dd929dadb", package = "mcp-toolkit-observability", features = ["tracing-bridge"] }
-mcp-toolkit-scratchpad = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "697d903721d725945251acd87217e17dd929dadb", package = "mcp-toolkit-scratchpad" }
+mcp-toolkit-core = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "a517dce8d557bca96b445b8875eeb09cbffa1ab6", package = "mcp-toolkit-core" }
+mcp-toolkit-observability = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "a517dce8d557bca96b445b8875eeb09cbffa1ab6", package = "mcp-toolkit-observability", features = ["tracing-bridge"] }
+mcp-toolkit-scratchpad = { git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "a517dce8d557bca96b445b8875eeb09cbffa1ab6", package = "mcp-toolkit-scratchpad" }
 percent-encoding = "2.3.2"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "http2", "rustls-tls"] }
 rmcp = { version = "=1.7.0", features = ["server", "macros", "schemars", "transport-io"] }
