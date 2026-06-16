@@ -55,7 +55,19 @@ must preserve the trailing slash. Domain properties use `sc-domain:example.com`.
 
 Use `gsc_search_analytics_query` for performance rows. The request supports the official Search
 Analytics dimensions and filter group structure. `row_limit` is validated against the documented
-maximum of 25,000 rows.
+maximum of 25,000 rows. Set `response_mode` to `compact` for broad SEO batches that need concise,
+copy/export-friendly rows and a pagination receipt instead of raw Google row objects.
+
+```json
+{
+  "site_url": "https://www.example.com/",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-31",
+  "dimensions": ["page", "query"],
+  "row_limit": 1000,
+  "response_mode": "compact"
+}
+```
 
 Use `gsc_url_inspection_index_inspect` for the Google-indexed status of a URL. The Google API does
 not provide live indexability testing through this method.

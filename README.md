@@ -243,4 +243,23 @@ Search Console URL-prefix properties must include their trailing slash, for exam
 
 Search Analytics result volume is bounded by Google Search Console API limits. The server validates
 `rowLimit` against the documented 1 to 25,000 range and returns the upstream result as structured
-JSON without inventing SEO scores or rankings.
+JSON without inventing SEO scores or rankings. For broad agent harvesting, set `response_mode` to
+`compact` so the response is shaped into export-friendly rows with a paging receipt instead of the
+raw Google row objects.
+
+```json
+{
+  "site_url": "https://www.example.com/",
+  "start_date": "2026-05-01",
+  "end_date": "2026-05-31",
+  "dimensions": ["page", "query"],
+  "row_limit": 1000,
+  "response_mode": "compact"
+}
+```
+
+Compact Search Analytics responses include:
+
+- `summary.row_count`, `summary.start_row`, `summary.requested_row_limit`, and `summary.next_start_row`
+- `columns`, combining the requested dimensions with `clicks`, `impressions`, `ctr`, and `position`
+- `rows`, where each row is keyed by dimension name plus the standard Search Analytics metrics

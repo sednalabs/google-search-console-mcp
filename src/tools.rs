@@ -8,7 +8,7 @@ use rmcp::tool;
 use rmcp::tool_router;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::auth_ux::{
     auth_login_cli_command, local_credential_material_detected, login_command_for_scope,
@@ -67,6 +67,21 @@ pub struct AuthLoginCommandArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchAnalyticsResponseMode {
+    /// Return the raw Google Search Console API response.
+    Raw,
+    /// Return rows in a compact, export-friendly shape with paging receipts.
+    Compact,
+}
+
+impl Default for SearchAnalyticsResponseMode {
+    fn default() -> Self {
+        Self::Raw
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchAnalyticsQueryArgs {
     /// Search Console property URL, for example `https://www.example.com/` or `sc-domain:example.com`.
     pub site_url: String,
@@ -95,6 +110,9 @@ pub struct SearchAnalyticsQueryArgs {
     /// Optional data state: final, all, or hourly_all.
     #[serde(default)]
     pub data_state: Option<String>,
+    /// Response shape. Use compact for agent-friendly batch evidence rows.
+    #[serde(default)]
+    pub response_mode: SearchAnalyticsResponseMode,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -150,6 +168,90 @@ fn registered_tools(profile: CapabilityProfile) -> Vec<rmcp::model::Tool> {
 
 fn redact_tool_error_message(err: &impl std::fmt::Display) -> String {
     contract::redact_secret_text(&err.to_string())
+}
+
+fn compact_search_analytics_response(
+    value: Value,
+    dimensions: &[String],
+    row_limit: Option<u32>,
+    start_row: Option<u32>,
+) -> Value {
+    let requested_row_limit = row_limit.unwrap_or(1_000);
+    let start_row = start_row.unwrap_or(0);
+    let rows = value
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let compact_rows: Vec<Value> = rows
+        .iter()
+        .map(|row| compact_search_analytics_row(row, dimensions))
+        .collect();
+    let returned_rows = compact_rows.len() as u32;
+    let next_start_row = if requested_row_limit > 0 && returned_rows == requested_row_limit {
+        Some(start_row.saturating_add(returned_rows))
+    } else {
+        None
+    };
+
+    let mut summary = Map::new();
+    summary.insert("row_count".to_string(), json!(returned_rows));
+    summary.insert("start_row".to_string(), json!(start_row));
+    summary.insert("requested_row_limit".to_string(), json!(requested_row_limit));
+    summary.insert(
+        "has_more_hint".to_string(),
+        json!(next_start_row.is_some()),
+    );
+    if let Some(next_start_row) = next_start_row {
+        summary.insert("next_start_row".to_string(), json!(next_start_row));
+    }
+    summary.insert("dimensions".to_string(), json!(dimensions));
+    summary.insert(
+        "metrics".to_string(),
+        json!(["clicks", "impressions", "ctr", "position"]),
+    );
+    if let Some(response_aggregation_type) = value.get("responseAggregationType") {
+        summary.insert(
+            "response_aggregation_type".to_string(),
+            response_aggregation_type.clone(),
+        );
+    }
+
+    let mut columns: Vec<Value> = dimensions.iter().map(|dimension| json!(dimension)).collect();
+    columns.extend(["clicks", "impressions", "ctr", "position"].map(|metric| json!(metric)));
+
+    json!({
+        "summary": summary,
+        "columns": columns,
+        "rows": compact_rows,
+    })
+}
+
+fn compact_search_analytics_row(row: &Value, dimensions: &[String]) -> Value {
+    let keys = row
+        .get("keys")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut compact = Map::new();
+
+    for (index, dimension) in dimensions.iter().enumerate() {
+        let value = keys.get(index).cloned().unwrap_or(Value::Null);
+        compact.insert(dimension.clone(), value);
+    }
+    if dimensions.is_empty() && !keys.is_empty() {
+        compact.insert("keys".to_string(), Value::Array(keys));
+    }
+
+    for metric in ["clicks", "impressions", "ctr", "position"] {
+        compact.insert(
+            metric.to_string(),
+            row.get(metric).cloned().unwrap_or(Value::Null),
+        );
+    }
+
+    Value::Object(compact)
 }
 
 #[tool_router(router = tool_router_search_console, vis = "pub")]
@@ -402,13 +504,17 @@ impl SearchConsoleMcp {
     /// Query Search Console performance rows.
     #[tool(
         name = "gsc_search_analytics_query",
-        description = "Query Search Console Search Analytics performance rows for a property and date range."
+        description = "Query Search Console Search Analytics performance rows for a property and date range. Set response_mode to compact for export-friendly batch evidence."
     )]
     async fn gsc_search_analytics_query(
         &self,
         Parameters(args): Parameters<SearchAnalyticsQueryArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
+        let dimensions = args.dimensions.clone();
+        let row_limit = args.row_limit;
+        let start_row = args.start_row;
+        let response_mode = args.response_mode;
         let request = SearchAnalyticsRequest {
             site_url: args.site_url,
             start_date: args.start_date,
@@ -422,7 +528,15 @@ impl SearchConsoleMcp {
             data_state: args.data_state,
         };
         match self.client.search_analytics_query(request).await {
-            Ok(value) => Ok(contract::success(value, started)),
+            Ok(value) => {
+                let value = match response_mode {
+                    SearchAnalyticsResponseMode::Raw => value,
+                    SearchAnalyticsResponseMode::Compact => {
+                        compact_search_analytics_response(value, &dimensions, row_limit, start_row)
+                    }
+                };
+                Ok(contract::success(value, started))
+            }
             Err(err) => Ok(contract::error(err, started)),
         }
     }
@@ -856,5 +970,59 @@ mod tests {
         assert!(instruction.contains("GOOGLE_SEARCH_CONSOLE_MCP_SCOPE"));
         assert!(instruction.contains(custom_scope));
         assert!(instruction.contains("--scope"));
+    }
+
+    #[test]
+    fn compact_search_analytics_response_shapes_rows_and_receipt() {
+        let upstream = json!({
+            "responseAggregationType": "byPage",
+            "rows": [
+                {
+                    "keys": ["https://www.example.com/a", "rust mcp"],
+                    "clicks": 12,
+                    "impressions": 240,
+                    "ctr": 0.05,
+                    "position": 7.2
+                },
+                {
+                    "keys": ["https://www.example.com/b", "search console"],
+                    "clicks": 3,
+                    "impressions": 80,
+                    "ctr": 0.0375,
+                    "position": 11.0
+                }
+            ]
+        });
+        let compact = compact_search_analytics_response(
+            upstream,
+            &["page".to_string(), "query".to_string()],
+            Some(2),
+            Some(4),
+        );
+
+        assert_eq!(compact["summary"]["row_count"], json!(2));
+        assert_eq!(compact["summary"]["start_row"], json!(4));
+        assert_eq!(compact["summary"]["requested_row_limit"], json!(2));
+        assert_eq!(compact["summary"]["next_start_row"], json!(6));
+        assert_eq!(compact["summary"]["has_more_hint"], json!(true));
+        assert_eq!(compact["summary"]["response_aggregation_type"], json!("byPage"));
+        assert_eq!(
+            compact["columns"],
+            json!(["page", "query", "clicks", "impressions", "ctr", "position"])
+        );
+        assert_eq!(compact["rows"][0]["page"], json!("https://www.example.com/a"));
+        assert_eq!(compact["rows"][0]["query"], json!("rust mcp"));
+        assert_eq!(compact["rows"][0]["clicks"], json!(12));
+        assert_eq!(compact["rows"][0]["position"], json!(7.2));
+    }
+
+    #[test]
+    fn compact_search_analytics_response_handles_missing_rows() {
+        let compact =
+            compact_search_analytics_response(json!({}), &["page".to_string()], Some(10), None);
+
+        assert_eq!(compact["summary"]["row_count"], json!(0));
+        assert_eq!(compact["summary"]["has_more_hint"], json!(false));
+        assert_eq!(compact["rows"], json!([]));
     }
 }
