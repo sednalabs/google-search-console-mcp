@@ -208,7 +208,7 @@ async fn run_login(settings: &Settings, args: &AuthLoginArgs) -> Result<()> {
         );
     }
 
-    let status = ProcessCommand::new("gcloud")
+    let status = ProcessCommand::new(gcloud_command())
         .args(&command_args[1..])
         .status()
         .context("failed to run gcloud")?;
@@ -868,8 +868,16 @@ fn shell_word(arg: &str) -> String {
     }
 }
 
+fn gcloud_command() -> &'static str {
+    if cfg!(windows) {
+        "gcloud.cmd"
+    } else {
+        "gcloud"
+    }
+}
+
 fn gcloud_version_summary() -> Option<String> {
-    let output = ProcessCommand::new("gcloud")
+    let output = ProcessCommand::new(gcloud_command())
         .arg("--version")
         .output()
         .ok()?;
@@ -945,6 +953,15 @@ mod tests {
             login_command_for_scope(login_scope(&settings, false), false, None),
             "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly'"
         );
+    }
+
+    #[test]
+    fn gcloud_command_matches_platform_executable() {
+        if cfg!(windows) {
+            assert_eq!(gcloud_command(), "gcloud.cmd");
+        } else {
+            assert_eq!(gcloud_command(), "gcloud");
+        }
     }
 
     #[test]
