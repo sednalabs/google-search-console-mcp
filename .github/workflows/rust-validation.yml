@@ -28,48 +28,52 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Build CLI
+        run: cargo build --bin google-search-console-mcp
+
       - name: Auth CLI smoke
         run: |
           set -euo pipefail
-          readonly_command="$(cargo run --quiet -- auth command)"
+          bin="target/debug/google-search-console-mcp"
+          readonly_command="$(timeout 30s "$bin" auth command)"
           test "$readonly_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly'"
-          bad_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/drive cargo run --quiet -- auth command)"
+          bad_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/drive timeout 30s "$bin" auth command)"
           test "$bad_scope_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly'"
-          bad_scope_login="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/drive cargo run --quiet -- auth login --dry-run)"
+          bad_scope_login="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/drive timeout 30s "$bin" auth login --dry-run)"
           test "$bad_scope_login" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly'"
-          ambient_write_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters cargo run --quiet -- auth command)"
+          ambient_write_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE=https://www.googleapis.com/auth/webmasters timeout 30s "$bin" auth command)"
           test "$ambient_write_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly'"
           custom_scope="https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email"
-          env_custom_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" cargo run --quiet -- auth command)"
+          env_custom_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" timeout 30s "$bin" auth command)"
           test "$env_custom_scope_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email'"
-          explicit_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" cargo run --quiet -- auth command --scope "$custom_scope")"
+          explicit_scope_command="$(GOOGLE_SEARCH_CONSOLE_MCP_SCOPE="$custom_scope" timeout 30s "$bin" auth command --scope "$custom_scope")"
           test "$explicit_scope_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly,https://www.googleapis.com/auth/userinfo.email'"
-          if cargo run --quiet -- auth command --write-scope --scope "$custom_scope" >/tmp/gsc-auth-command.out 2>/tmp/gsc-auth-command.err; then
+          if timeout 30s "$bin" auth command --write-scope --scope "$custom_scope" >/tmp/gsc-auth-command.out 2>/tmp/gsc-auth-command.err; then
             echo "expected --write-scope plus explicit --scope to fail" >&2
             exit 1
           fi
           grep -F -- "--write-scope" /tmp/gsc-auth-command.err >/dev/null
-          write_command="$(cargo run --quiet -- auth command --write-scope)"
+          write_command="$(timeout 30s "$bin" auth command --write-scope)"
           test "$write_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters'"
-          client_command="$(cargo run --quiet -- auth command --client-id-file /tmp/client_id.json)"
+          client_command="$(timeout 30s "$bin" auth command --client-id-file /tmp/client_id.json)"
           test "$client_command" = "gcloud auth application-default login '--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly' --client-id-file /tmp/client_id.json"
-          cargo run --quiet -- auth status --json \
+          timeout 30s "$bin" auth status --json \
             | jq -e '.server == "google-search-console-mcp" and .verification.status == "not_checked" and .ready == false and .config_valid == false' >/dev/null
-          cargo run --quiet -- auth status --service-account-json-path /tmp/does-not-exist-google-search-console-mcp.json --json \
+          timeout 30s "$bin" auth status --service-account-json-path /tmp/does-not-exist-google-search-console-mcp.json --json \
             | jq -e '.verification.status == "config_error" and .credential_material_detected == false and .config_valid == false' >/dev/null
 
       - name: Print tool inventory
         run: |
           set -euo pipefail
-          cargo run -- --print-tools \
-            | jq -e 'length > 0 and (index("gsc_sitemap_submit") | not)' >/dev/null
-          cargo run -- --profile operator --print-tools \
-            | jq -e 'index("gsc_sitemap_submit") != null' >/dev/null
+          timeout 30s target/debug/google-search-console-mcp --print-tools \
+            | jq -e 'length > 0 and (index("gsc_sitemap_submit") | not) and (index("gsc_scratchpad_set_runtime_limits") | not)' >/dev/null
+          timeout 30s target/debug/google-search-console-mcp --profile operator --print-tools \
+            | jq -e 'index("gsc_sitemap_submit") != null and index("gsc_scratchpad_set_runtime_limits") != null' >/dev/null
 
       - name: Print tool schema
         run: |
           set -euo pipefail
-          cargo run -- --print-tool-schema \
-            | jq -e '.tools | length > 0 and (map(.name) | index("gsc_sitemap_submit") | not)' >/dev/null
-          cargo run -- --profile operator --print-tool-schema \
-            | jq -e '.tools | map(.name) | index("gsc_sitemap_submit") != null' >/dev/null
+          timeout 30s target/debug/google-search-console-mcp --print-tool-schema \
+            | jq -e '.tools | length > 0 and (map(.name) | index("gsc_sitemap_submit") | not) and (map(.name) | index("gsc_scratchpad_set_runtime_limits") | not)' >/dev/null
+          timeout 30s target/debug/google-search-console-mcp --profile operator --print-tool-schema \
+            | jq -e '.tools | map(.name) | index("gsc_sitemap_submit") != null and index("gsc_scratchpad_set_runtime_limits") != null' >/dev/null

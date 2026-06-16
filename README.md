@@ -207,7 +207,7 @@ mount a file and can provide the JSON as a sealed secret.
 | `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | ADC `quota_project_id`, when present | Optional `x-goog-user-project` header override |
 | `GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS` | `15000` | Upstream request timeout |
 | `GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT` | `25000` | Maximum Search Analytics `rowLimit` |
-| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR` | OS temp dir | Optional DuckDB scratchpad file root |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR` | OS temp dir | Optional DuckDB scratchpad file root. The default is auto-created; custom roots must already exist. |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS` | `900` | Scratchpad session lifetime |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS` | `64` | Maximum active scratchpad sessions |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION` | `32` | Maximum scratchpad tables per session |
