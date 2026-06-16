@@ -860,8 +860,8 @@ fn shell_command(args: &[String]) -> String {
 fn shell_word(arg: &str) -> String {
     if !arg.is_empty()
         && arg
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '='))
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '='))
     {
         arg.to_string()
     } else {
