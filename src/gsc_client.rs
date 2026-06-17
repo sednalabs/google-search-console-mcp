@@ -933,7 +933,7 @@ mod tests {
         let client_secret = tempfile::NamedTempFile::new().expect("temp file");
         std::fs::write(
             client_secret.path(),
-            r#"{"installed":{"client_id":"client","client_secret":"secret","token_uri":"http://evil.test/token"}}"#,
+            r#"{"installed":{"client_id":"client","client_secret":"secret","token_uri":"https://invalid-token-uri.example/token"}}"#,
         )
         .expect("write secret json");
         let err = parse_oauth_refresh_config(
@@ -942,7 +942,7 @@ mod tests {
         )
         .expect_err("invalid token uri");
         assert!(
-            matches!(err, SearchConsoleError::AuthBootstrap(message) if message.contains("must use https"))
+            matches!(err, SearchConsoleError::AuthBootstrap(message) if message.contains("must be one of"))
         );
 
         let client_secret = tempfile::NamedTempFile::new().expect("temp file");
