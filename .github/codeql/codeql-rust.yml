@@ -1,0 +1,9 @@
+name: google-search-console-mcp-codeql-rust
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - src
+
+threat-models: [local]
