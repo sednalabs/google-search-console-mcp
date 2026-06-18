@@ -225,17 +225,15 @@ impl SearchConsoleClient {
             .bytes()
             .await
             .map_err(SearchConsoleError::Transport)?;
-        let parsed: TokenInfoResponse = serde_json::from_slice(&bytes).map_err(|err| {
-            SearchConsoleError::AuthBootstrap(format!(
-                "failed to parse OAuth tokeninfo response: {err}"
-            ))
-        })?;
-
         if !status.is_success() {
-            let error = parsed.error.as_deref().unwrap_or("unknown_error");
+            let parsed: Option<TokenInfoResponse> = serde_json::from_slice(&bytes).ok();
+            let error = parsed
+                .as_ref()
+                .and_then(|value| value.error.as_deref())
+                .unwrap_or("unknown_error");
             let detail = parsed
-                .error_description
-                .as_deref()
+                .as_ref()
+                .and_then(|value| value.error_description.as_deref())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
@@ -247,6 +245,12 @@ impl SearchConsoleClient {
                 status.as_u16()
             )));
         }
+
+        let parsed: TokenInfoResponse = serde_json::from_slice(&bytes).map_err(|err| {
+            SearchConsoleError::AuthBootstrap(format!(
+                "failed to parse OAuth tokeninfo response: {err}"
+            ))
+        })?;
 
         let granted_scopes = parse_scope_list(parsed.scope.as_deref().unwrap_or_default());
         Ok(OperatorScopeCheck {
@@ -953,12 +957,7 @@ fn clip_message(message: String) -> String {
 }
 
 fn parse_scope_list(scopes: &str) -> Vec<String> {
-    scopes
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|scope| !scope.is_empty())
-        .map(str::to_string)
-        .collect()
+    scopes.split_whitespace().map(str::to_string).collect()
 }
 
 fn validate_oauth_token_uri(token_uri: &str) -> Result<(), SearchConsoleError> {

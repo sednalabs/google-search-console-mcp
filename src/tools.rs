@@ -375,7 +375,9 @@ impl SearchConsoleMcp {
         let token_ok = token_check.get("ok").and_then(Value::as_bool);
         let operator_scope_relevant =
             self.profile.allows_mutation() || self.client.scope() == WRITE_SCOPE;
-        let operator_scope_check = if operator_scope_relevant && args.verify_token {
+        let should_check_operator_scope =
+            operator_scope_relevant && args.verify_token && token_ok == Some(true);
+        let operator_scope_check = if should_check_operator_scope {
             match self.client.verify_operator_scope().await {
                 Ok(check) => operator_scope_check_to_json(check),
                 Err(err) => json!({
@@ -385,6 +387,13 @@ impl SearchConsoleMcp {
                     "error": redact_tool_error_message(&err),
                 }),
             }
+        } else if operator_scope_relevant && args.verify_token {
+            json!({
+                "checked": true,
+                "ok": false,
+                "required_scope": WRITE_SCOPE,
+                "error": "skipped because token verification failed",
+            })
         } else {
             json!({
                 "checked": false,
