@@ -488,7 +488,10 @@ impl SearchConsoleMcp {
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
         match self.scratchpad_sessions.open_session(&args.session_id) {
-            Ok(info) => Ok(contract::success(scratchpad_session_info_to_json(info), started)),
+            Ok(info) => Ok(contract::success(
+                scratchpad_session_info_to_json(info),
+                started,
+            )),
             Err(err) => Ok(contract::scratchpad_error(err, started)),
         }
     }
@@ -552,7 +555,10 @@ impl SearchConsoleMcp {
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
         let limit = args.limit.unwrap_or(50).clamp(1, 200);
-        match self.scratchpad_sessions.list_tables(&args.session_id, limit) {
+        match self
+            .scratchpad_sessions
+            .list_tables(&args.session_id, limit)
+        {
             Ok(tables) => Ok(contract::success(
                 json!({
                     "session_id": args.session_id,
@@ -578,10 +584,11 @@ impl SearchConsoleMcp {
         Parameters(args): Parameters<ScratchpadDropTableArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
-        match self
-            .scratchpad_sessions
-            .drop_table(&args.session_id, &args.table_name, args.if_exists)
-        {
+        match self.scratchpad_sessions.drop_table(
+            &args.session_id,
+            &args.table_name,
+            args.if_exists,
+        ) {
             Ok(stats) => Ok(contract::success(
                 json!({
                     "session_id": args.session_id,
@@ -630,12 +637,16 @@ impl SearchConsoleMcp {
         Parameters(args): Parameters<ScratchpadIngestSearchAnalyticsArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
-        let dimensions = args.dimensions.clone();
+        let dimensions = args
+            .dimensions
+            .iter()
+            .map(|dimension| dimension.trim().to_string())
+            .collect::<Vec<_>>();
         let request = SearchAnalyticsRequest {
             site_url: args.site_url,
             start_date: args.start_date,
             end_date: args.end_date,
-            dimensions: args.dimensions,
+            dimensions: dimensions.clone(),
             search_type: args.search_type,
             dimension_filter_groups: args.dimension_filter_groups,
             aggregation_type: args.aggregation_type,
@@ -728,7 +739,7 @@ impl SearchConsoleMcp {
                 .rows
                 .first()
                 .and_then(|row| row.get("row_count"))
-                .and_then(Value::as_u64)
+                .and_then(json_u64)
                 .unwrap_or(0);
             let sample_sql = format!("SELECT * FROM {quoted}");
             let sample_projection = match self.scratchpad_sessions.query_rows(
@@ -1085,6 +1096,13 @@ fn ingest_mode_label(mode: ScratchpadIngestMode) -> &'static str {
 
 fn quote_scratchpad_ident(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn json_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+        .or_else(|| value.as_f64().map(|number| number as u64))
 }
 
 fn markdown_table(projection: &ScratchpadQueryProjection) -> String {

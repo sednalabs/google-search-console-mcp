@@ -243,13 +243,19 @@ impl Settings {
             ));
         }
         if cli.scratchpad_max_memory_mb == 0 {
-            return Err(anyhow!("scratchpad max memory mb must be greater than zero"));
+            return Err(anyhow!(
+                "scratchpad max memory mb must be greater than zero"
+            ));
         }
         if cli.scratchpad_query_timeout_ms == 0 {
-            return Err(anyhow!("scratchpad query timeout must be greater than zero"));
+            return Err(anyhow!(
+                "scratchpad query timeout must be greater than zero"
+            ));
         }
         if cli.scratchpad_max_sql_bytes == 0 {
-            return Err(anyhow!("scratchpad max sql bytes must be greater than zero"));
+            return Err(anyhow!(
+                "scratchpad max sql bytes must be greater than zero"
+            ));
         }
         Ok(Self {
             profile: cli.profile,
