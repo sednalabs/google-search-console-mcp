@@ -20,6 +20,12 @@ Use `gsc_search_analytics_query` for performance rows. The request supports the 
 Analytics dimensions and filter group structure. `row_limit` is validated against the documented
 maximum of 25,000 rows.
 
+Dimension compatibility is validated locally before the Google API call. In particular:
+
+- `search_type=googleNews` and `search_type=discover` do not accept the `query` dimension
+- `data_state=hourly_all` requires the `hour` dimension
+- `hour` cannot be combined with `date`; use `hour` alone for hourly rows
+
 Use `gsc_url_inspection_index_inspect` for the Google-indexed status of a URL. The Google API does
 not provide live indexability testing through this method.
 
