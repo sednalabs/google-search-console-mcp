@@ -64,9 +64,12 @@ pub struct SearchAnalyticsQueryArgs {
     /// End date in YYYY-MM-DD format, in Search Console's Pacific Time reporting calendar.
     pub end_date: String,
     /// Optional dimensions such as query, page, country, device, date, hour, or searchAppearance.
+    /// Compatibility depends on search_type and data_state; for example googleNews/discover do not
+    /// support query, and hourly_all uses hour without date.
     #[serde(default)]
     pub dimensions: Vec<String>,
     /// Optional Search Console type: web, image, video, news, googleNews, or discover.
+    /// Some dimensions are search-type specific.
     #[serde(default)]
     pub search_type: Option<String>,
     /// Optional official dimensionFilterGroups structure. snake_case keys are converted to camelCase.
@@ -81,7 +84,7 @@ pub struct SearchAnalyticsQueryArgs {
     /// Zero-based first row offset for paging.
     #[serde(default)]
     pub start_row: Option<u32>,
-    /// Optional data state: final, all, or hourly_all.
+    /// Optional data state: final, all, or hourly_all. hourly_all requires the hour dimension.
     #[serde(default)]
     pub data_state: Option<String>,
 }

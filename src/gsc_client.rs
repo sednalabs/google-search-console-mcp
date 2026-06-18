@@ -240,7 +240,7 @@ impl SearchConsoleClient {
         validate_site_url(&request.site_url)?;
         validate_iso_date("start_date", &request.start_date)?;
         validate_iso_date("end_date", &request.end_date)?;
-        validate_dimensions(&request.dimensions)?;
+        validate_search_analytics_request(&request)?;
         let row_limit = request.row_limit.unwrap_or(1_000);
         if row_limit == 0 || row_limit > self.max_row_limit {
             return Err(SearchConsoleError::invalid(
@@ -709,7 +709,53 @@ pub fn validate_iso_date(field: &'static str, value: &str) -> Result<(), SearchC
     }
 }
 
-fn validate_dimensions(dimensions: &[String]) -> Result<(), SearchConsoleError> {
+fn validate_search_analytics_request(
+    request: &SearchAnalyticsRequest,
+) -> Result<(), SearchConsoleError> {
+    let search_type = normalize_search_type(request.search_type.as_deref())?;
+    let data_state = normalize_data_state(request.data_state.as_deref())?;
+    let dimensions = validate_dimensions(&request.dimensions)?;
+
+    if dimensions.contains(&"hour") && data_state != Some("hourly_all") {
+        return Err(SearchConsoleError::invalid(
+            "dimensions",
+            "dimension 'hour' requires data_state 'hourly_all'; use dimension 'date' for daily rows",
+        ));
+    }
+
+    if data_state == Some("hourly_all") && !dimensions.contains(&"hour") {
+        return Err(SearchConsoleError::invalid(
+            "data_state",
+            "data_state 'hourly_all' requires the 'hour' dimension; use 'hour' for hourly rows or switch to 'all' or 'final' for daily rows",
+        ));
+    }
+
+    if dimensions.contains(&"hour") && dimensions.contains(&"date") {
+        return Err(SearchConsoleError::invalid(
+            "dimensions",
+            "dimension 'date' cannot be combined with 'hour'; use 'hour' alone for hourly rows",
+        ));
+    }
+
+    if matches!(search_type, Some("googleNews" | "discover")) && dimensions.contains(&"query") {
+        let search_type = search_type.expect("matches! ensured search_type is present");
+        let alternatives = if search_type == "googleNews" {
+            "page, date, country, device, or searchAppearance"
+        } else {
+            "page, date, country, or searchAppearance"
+        };
+        return Err(SearchConsoleError::invalid(
+            "dimensions",
+            format!(
+                "dimension 'query' is not supported for search_type '{search_type}'; use one of {alternatives}"
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_dimensions(dimensions: &[String]) -> Result<Vec<&str>, SearchConsoleError> {
     let mut seen = Vec::new();
     for dimension in dimensions {
         let trimmed = dimension.trim();
@@ -725,9 +771,46 @@ fn validate_dimensions(dimensions: &[String]) -> Result<(), SearchConsoleError> 
                 format!("dimension '{trimmed}' appears more than once"),
             ));
         }
+        if !matches!(
+            trimmed,
+            "query" | "page" | "country" | "device" | "date" | "hour" | "searchAppearance"
+        ) {
+            return Err(SearchConsoleError::invalid(
+                "dimensions",
+                format!(
+                    "dimension '{trimmed}' is not supported; use only query, page, country, device, date, hour, or searchAppearance"
+                ),
+            ));
+        }
         seen.push(trimmed);
     }
-    Ok(())
+    Ok(seen)
+}
+
+fn normalize_search_type(search_type: Option<&str>) -> Result<Option<&str>, SearchConsoleError> {
+    match search_type.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value @ ("web" | "image" | "video" | "news" | "googleNews" | "discover")) => {
+            Ok(Some(value))
+        }
+        Some(value) => Err(SearchConsoleError::invalid(
+            "search_type",
+            format!(
+                "unsupported search_type '{value}'; use web, image, video, news, googleNews, or discover"
+            ),
+        )),
+        None => Ok(None),
+    }
+}
+
+fn normalize_data_state(data_state: Option<&str>) -> Result<Option<&str>, SearchConsoleError> {
+    match data_state.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value @ ("final" | "all" | "hourly_all")) => Ok(Some(value)),
+        Some(value) => Err(SearchConsoleError::invalid(
+            "data_state",
+            format!("unsupported data_state '{value}'; use final, all, or hourly_all"),
+        )),
+        None => Ok(None),
+    }
 }
 
 fn parse_https_upstream_url(raw: &str) -> Result<Url, SearchConsoleError> {
@@ -899,6 +982,127 @@ mod tests {
     fn validates_iso_dates_by_shape() {
         validate_iso_date("start_date", "2026-06-14").expect("date shape");
         assert!(validate_iso_date("start_date", "14-06-2026").is_err());
+    }
+
+    #[test]
+    fn validates_supported_search_analytics_dimensions() {
+        let request = SearchAnalyticsRequest {
+            site_url: "sc-domain:example.com".to_string(),
+            start_date: "2026-06-14".to_string(),
+            end_date: "2026-06-14".to_string(),
+            dimensions: vec!["query".to_string(), "page".to_string()],
+            search_type: Some("web".to_string()),
+            dimension_filter_groups: None,
+            aggregation_type: None,
+            row_limit: None,
+            start_row: None,
+            data_state: None,
+        };
+        validate_search_analytics_request(&request).expect("standard web dimensions");
+    }
+
+    #[test]
+    fn rejects_unknown_search_analytics_dimension() {
+        let request = SearchAnalyticsRequest {
+            site_url: "sc-domain:example.com".to_string(),
+            start_date: "2026-06-14".to_string(),
+            end_date: "2026-06-14".to_string(),
+            dimensions: vec!["author".to_string()],
+            search_type: None,
+            dimension_filter_groups: None,
+            aggregation_type: None,
+            row_limit: None,
+            start_row: None,
+            data_state: None,
+        };
+        let err = validate_search_analytics_request(&request).expect_err("invalid dimension");
+        assert!(
+            matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "dimensions" && message.contains("author"))
+        );
+    }
+
+    #[test]
+    fn rejects_query_dimension_for_google_news() {
+        let request = SearchAnalyticsRequest {
+            site_url: "sc-domain:example.com".to_string(),
+            start_date: "2026-06-14".to_string(),
+            end_date: "2026-06-14".to_string(),
+            dimensions: vec!["query".to_string(), "page".to_string()],
+            search_type: Some("googleNews".to_string()),
+            dimension_filter_groups: None,
+            aggregation_type: None,
+            row_limit: None,
+            start_row: None,
+            data_state: None,
+        };
+        let err =
+            validate_search_analytics_request(&request).expect_err("google news query unsupported");
+        assert!(
+            matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "dimensions" && message.contains("googleNews") && message.contains("page"))
+        );
+    }
+
+    #[test]
+    fn rejects_hour_dimension_without_hourly_data_state() {
+        let request = SearchAnalyticsRequest {
+            site_url: "sc-domain:example.com".to_string(),
+            start_date: "2026-06-14".to_string(),
+            end_date: "2026-06-14".to_string(),
+            dimensions: vec!["hour".to_string()],
+            search_type: Some("web".to_string()),
+            dimension_filter_groups: None,
+            aggregation_type: None,
+            row_limit: None,
+            start_row: None,
+            data_state: Some("all".to_string()),
+        };
+        let err =
+            validate_search_analytics_request(&request).expect_err("hour requires hourly_all");
+        assert!(
+            matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "dimensions" && message.contains("hourly_all"))
+        );
+    }
+
+    #[test]
+    fn rejects_hourly_all_without_hour_dimension() {
+        let request = SearchAnalyticsRequest {
+            site_url: "sc-domain:example.com".to_string(),
+            start_date: "2026-06-14".to_string(),
+            end_date: "2026-06-14".to_string(),
+            dimensions: vec!["date".to_string()],
+            search_type: Some("web".to_string()),
+            dimension_filter_groups: None,
+            aggregation_type: None,
+            row_limit: None,
+            start_row: None,
+            data_state: Some("hourly_all".to_string()),
+        };
+        let err = validate_search_analytics_request(&request)
+            .expect_err("hourly_all requires hour dimension");
+        assert!(
+            matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "data_state" && message.contains("'hour' dimension"))
+        );
+    }
+
+    #[test]
+    fn rejects_date_and_hour_combination() {
+        let request = SearchAnalyticsRequest {
+            site_url: "sc-domain:example.com".to_string(),
+            start_date: "2026-06-14".to_string(),
+            end_date: "2026-06-14".to_string(),
+            dimensions: vec!["date".to_string(), "hour".to_string()],
+            search_type: Some("web".to_string()),
+            dimension_filter_groups: None,
+            aggregation_type: None,
+            row_limit: None,
+            start_row: None,
+            data_state: Some("hourly_all".to_string()),
+        };
+        let err =
+            validate_search_analytics_request(&request).expect_err("date and hour conflict");
+        assert!(
+            matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "dimensions" && message.contains("cannot be combined"))
+        );
     }
 
     #[test]

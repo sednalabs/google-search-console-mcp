@@ -151,3 +151,9 @@ Search Console URL-prefix properties must include their trailing slash, for exam
 Search Analytics result volume is bounded by Google Search Console API limits. The server validates
 `rowLimit` against the documented 1 to 25,000 range and returns the upstream result as structured
 JSON without inventing SEO scores or rankings.
+
+The server also rejects several invalid Search Analytics combinations before the upstream request:
+
+- `search_type=googleNews` and `search_type=discover` do not support the `query` dimension
+- `data_state=hourly_all` requires the `hour` dimension
+- `hour` cannot be combined with `date`; use `hour` alone for hourly rows
