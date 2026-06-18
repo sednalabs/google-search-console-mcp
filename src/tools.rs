@@ -733,7 +733,14 @@ impl SearchConsoleMcp {
                     .query_rows(&args.session_id, &count_sql, 0, 1)
                 {
                     Ok(projection) => projection,
-                    Err(err) => return Ok(contract::scratchpad_error(err, started)),
+                    Err(err) => {
+                        append_evidence_table_error(&mut bundle, &table_name, &err);
+                        summaries.push(json!({
+                            "table_name": table_name,
+                            "error": err.to_string(),
+                        }));
+                        continue;
+                    }
                 };
             let row_count = count_projection
                 .rows
@@ -749,7 +756,15 @@ impl SearchConsoleMcp {
                 sample_rows,
             ) {
                 Ok(projection) => projection,
-                Err(err) => return Ok(contract::scratchpad_error(err, started)),
+                Err(err) => {
+                    append_evidence_table_error(&mut bundle, &table_name, &err);
+                    summaries.push(json!({
+                        "table_name": table_name,
+                        "row_count": row_count,
+                        "error": err.to_string(),
+                    }));
+                    continue;
+                }
             };
 
             bundle.push_str(&format!("## `{table_name}`\n\n"));
@@ -1098,6 +1113,18 @@ fn quote_scratchpad_ident(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
+fn append_evidence_table_error(
+    bundle: &mut String,
+    table_name: &str,
+    err: &mcp_toolkit_scratchpad::ScratchpadError,
+) {
+    bundle.push_str(&format!("## `{table_name}`\n\n"));
+    bundle.push_str(&format!(
+        "- Error: `{}`\n\n",
+        escape_markdown_cell(&err.to_string())
+    ));
+}
+
 fn json_u64(value: &Value) -> Option<u64> {
     value
         .as_u64()
@@ -1146,7 +1173,7 @@ fn markdown_value(value: &Value) -> String {
 }
 
 fn escape_markdown_cell(value: &str) -> String {
-    value.replace('|', "\\|").replace('\n', " ")
+    value.replace('|', "\\|").replace('\r', "").replace('\n', " ")
 }
 
 fn auth_env_presence() -> Value {
