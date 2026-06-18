@@ -237,6 +237,10 @@ impl SearchConsoleClient {
         &self,
         request: SearchAnalyticsRequest,
     ) -> Result<Value, SearchConsoleError> {
+        let mut request = request;
+        for dimension in &mut request.dimensions {
+            *dimension = dimension.trim().to_string();
+        }
         validate_site_url(&request.site_url)?;
         validate_iso_date("start_date", &request.start_date)?;
         validate_iso_date("end_date", &request.end_date)?;
@@ -1019,6 +1023,13 @@ mod tests {
         assert!(
             matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "dimensions" && message.contains("author"))
         );
+    }
+
+    #[test]
+    fn validate_dimensions_accepts_trimmed_dimension_names() {
+        let dimensions = vec![" query ".to_string(), " page ".to_string()];
+        let validated = validate_dimensions(&dimensions).expect("trimmed dimensions");
+        assert_eq!(validated, vec!["query", "page"]);
     }
 
     #[test]
