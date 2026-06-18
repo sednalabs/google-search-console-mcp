@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::{OnceCell, RwLock};
 
-use crate::config::Settings;
+use crate::config::{Settings, WRITE_SCOPE};
 use crate::error::SearchConsoleError;
 
 const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -75,10 +75,27 @@ struct OAuthRefreshResponse {
     error_description: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct TokenInfoResponse {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    error_description: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 struct CachedAccessToken {
     value: String,
     refresh_after: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorScopeCheck {
+    pub required_scope: &'static str,
+    pub granted_scopes: Vec<String>,
+    pub ok: bool,
 }
 
 #[derive(Clone)]
@@ -192,6 +209,51 @@ impl SearchConsoleClient {
 
     pub async fn verify_token(&self) -> Result<(), SearchConsoleError> {
         self.access_token().await.map(|_| ())
+    }
+
+    pub async fn verify_operator_scope(&self) -> Result<OperatorScopeCheck, SearchConsoleError> {
+        let token = self.access_token().await?;
+        let response = self
+            .http
+            .request(Method::POST, "https://oauth2.googleapis.com/tokeninfo")
+            .form(&[("access_token", token.as_str())])
+            .send()
+            .await
+            .map_err(SearchConsoleError::Transport)?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(SearchConsoleError::Transport)?;
+        let parsed: TokenInfoResponse = serde_json::from_slice(&bytes).map_err(|err| {
+            SearchConsoleError::AuthBootstrap(format!(
+                "failed to parse OAuth tokeninfo response: {err}"
+            ))
+        })?;
+
+        if !status.is_success() {
+            let error = parsed.error.as_deref().unwrap_or("unknown_error");
+            let detail = parsed
+                .error_description
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    clip_message(String::from_utf8_lossy(&bytes).trim().to_string())
+                });
+            return Err(SearchConsoleError::AuthBootstrap(format!(
+                "oauth tokeninfo check failed with status {} ({error}): {detail}",
+                status.as_u16()
+            )));
+        }
+
+        let granted_scopes = parse_scope_list(parsed.scope.as_deref().unwrap_or_default());
+        Ok(OperatorScopeCheck {
+            required_scope: WRITE_SCOPE,
+            ok: granted_scopes.iter().any(|scope| scope == WRITE_SCOPE),
+            granted_scopes,
+        })
     }
 
     pub async fn get_site(&self, site_url: &str) -> Result<Value, SearchConsoleError> {
@@ -890,6 +952,15 @@ fn clip_message(message: String) -> String {
     format!("{}...", &message[..end])
 }
 
+fn parse_scope_list(scopes: &str) -> Vec<String> {
+    scopes
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn validate_oauth_token_uri(token_uri: &str) -> Result<(), SearchConsoleError> {
     let parsed = Url::parse(token_uri).map_err(|err| {
         SearchConsoleError::AuthBootstrap(format!(
@@ -1182,6 +1253,20 @@ mod tests {
         assert!(clipped.ends_with("..."));
         assert!(clipped.len() <= 1_027);
         assert!(clipped.chars().all(|ch| ch == 'é' || ch == '.'));
+    }
+
+    #[test]
+    fn parses_tokeninfo_scope_list() {
+        assert_eq!(
+            parse_scope_list(
+                "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/webmasters"
+            ),
+            vec![
+                "https://www.googleapis.com/auth/cloud-platform".to_string(),
+                "https://www.googleapis.com/auth/webmasters".to_string(),
+            ]
+        );
+        assert!(parse_scope_list("  \n\t ").is_empty());
     }
 
     fn test_settings() -> Settings {

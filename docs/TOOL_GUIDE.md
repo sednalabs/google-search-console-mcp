@@ -6,7 +6,8 @@ Use `gsc_get_started` immediately after install. It returns the recommended auth
 starter tools, and credential options without making an upstream Google request.
 
 Use `gsc_auth_status` to inspect auth configuration. Set `verify_token=true` when you want to prove
-token acquisition; the tool never returns the token.
+token acquisition and, for operator/write-scope runs, the `operator_scope_check`; the tool never
+returns the token.
 
 Use `gsc_auth_login_command` for a copyable Application Default Credentials command. Set
 `write_scope=true` only when preparing to run operator tools.
@@ -63,3 +64,7 @@ Operator tools also require Google credentials with the write scope:
 ```text
 https://www.googleapis.com/auth/webmasters
 ```
+
+Before using an operator tool, call `gsc_auth_status` with `verify_token=true` and confirm
+`operator_scope_check.ok` is `true`. If it is false, re-run the ADC login command returned by
+`gsc_auth_login_command` with `write_scope=true`.

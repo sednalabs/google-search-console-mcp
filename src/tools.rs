@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 
 use crate::config::{CapabilityProfile, WRITE_SCOPE};
 use crate::contract;
-use crate::gsc_client::SearchAnalyticsRequest;
+use crate::gsc_client::{OperatorScopeCheck, SearchAnalyticsRequest};
 use crate::server::{SearchConsoleMcp, tool_inventory_policy_for_profile};
 use crate::tool_surface::build_tool_inventory;
 
@@ -373,6 +373,30 @@ impl SearchConsoleMcp {
             json!({ "checked": false })
         };
         let token_ok = token_check.get("ok").and_then(Value::as_bool);
+        let operator_scope_relevant =
+            self.profile.allows_mutation() || self.client.scope() == WRITE_SCOPE;
+        let operator_scope_check = if operator_scope_relevant && args.verify_token {
+            match self.client.verify_operator_scope().await {
+                Ok(check) => operator_scope_check_to_json(check),
+                Err(err) => json!({
+                    "checked": true,
+                    "ok": false,
+                    "required_scope": WRITE_SCOPE,
+                    "error": redact_tool_error_message(&err),
+                }),
+            }
+        } else {
+            json!({
+                "checked": false,
+                "required_scope": WRITE_SCOPE,
+                "reason": if operator_scope_relevant {
+                    "set verify_token=true to prove operator write-scope readiness"
+                } else {
+                    "not using operator profile or write scope"
+                },
+            })
+        };
+        let operator_scope_ok = operator_scope_check.get("ok").and_then(Value::as_bool);
 
         Ok(contract::success(
             json!({
@@ -383,7 +407,13 @@ impl SearchConsoleMcp {
                 "quota_project_configured": self.client.quota_project_configured(),
                 "detected_env": auth_env_presence(),
                 "token_check": token_check,
-                "next_steps": auth_next_steps(args.verify_token, token_ok),
+                "operator_scope_check": operator_scope_check,
+                "next_steps": auth_next_steps(
+                    args.verify_token,
+                    token_ok,
+                    operator_scope_relevant,
+                    operator_scope_ok,
+                ),
                 "secrets_returned": false
             }),
             started,
@@ -1190,18 +1220,37 @@ fn auth_env_presence() -> Value {
     })
 }
 
-fn auth_next_steps(verified: bool, token_ok: Option<bool>) -> Vec<&'static str> {
-    match (verified, token_ok) {
-        (false, _) => vec![
+fn operator_scope_check_to_json(check: OperatorScopeCheck) -> Value {
+    json!({
+        "checked": true,
+        "ok": check.ok,
+        "required_scope": check.required_scope,
+        "granted_scopes": check.granted_scopes,
+    })
+}
+
+fn auth_next_steps(
+    verified: bool,
+    token_ok: Option<bool>,
+    operator_scope_relevant: bool,
+    operator_scope_ok: Option<bool>,
+) -> Vec<&'static str> {
+    match (verified, token_ok, operator_scope_relevant, operator_scope_ok) {
+        (false, _, _, _) => vec![
             "Run gsc_auth_status with verify_token=true when you are ready to prove credentials.",
             "If credentials are missing, call gsc_auth_login_command for the local ADC command.",
             "Call gsc_sites_list after auth is verified to discover exact property strings.",
         ],
-        (true, Some(true)) => vec![
+        (true, Some(true), true, Some(false) | None) => vec![
+            "Run gsc_auth_login_command with write_scope=true and reauthenticate with the webmasters scope.",
+            "Set a quota project if Google reports that local ADC credentials require one.",
+            "Call gsc_auth_status with verify_token=true again before sitemap/site mutations.",
+        ],
+        (true, Some(true), _, _) => vec![
             "Call gsc_sites_list to discover exact property strings.",
             "Use gsc_search_analytics_query for Search Console performance data.",
         ],
-        (true, Some(false)) | (true, None) => vec![
+        (true, Some(false), _, _) | (true, None, _, _) => vec![
             "Call gsc_auth_login_command and run the returned command for local ADC.",
             "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.",
             "Ensure the authenticated principal has access to the Search Console property.",
