@@ -1173,7 +1173,10 @@ fn markdown_value(value: &Value) -> String {
 }
 
 fn escape_markdown_cell(value: &str) -> String {
-    value.replace('|', "\\|").replace('\r', "").replace('\n', " ")
+    value
+        .replace('|', "\\|")
+        .replace('\r', "")
+        .replace('\n', " ")
 }
 
 fn auth_env_presence() -> Value {
