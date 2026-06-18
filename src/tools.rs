@@ -1235,7 +1235,12 @@ fn auth_next_steps(
     operator_scope_relevant: bool,
     operator_scope_ok: Option<bool>,
 ) -> Vec<&'static str> {
-    match (verified, token_ok, operator_scope_relevant, operator_scope_ok) {
+    match (
+        verified,
+        token_ok,
+        operator_scope_relevant,
+        operator_scope_ok,
+    ) {
         (false, _, _, _) => vec![
             "Run gsc_auth_status with verify_token=true when you are ready to prove credentials.",
             "If credentials are missing, call gsc_auth_login_command for the local ADC command.",
