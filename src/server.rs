@@ -7,6 +7,7 @@ use mcp_toolkit_core::rmcp_models;
 use mcp_toolkit_core::tool_inventory::{ToolInventory, ToolInventoryPolicy, ToolOperation};
 use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 use mcp_toolkit_observability::{EventContext, Level, emit_event, safe_text};
+use mcp_toolkit_scratchpad::SharedScratchpadSessionManager;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
@@ -26,6 +27,7 @@ use crate::tool_surface::build_tool_inventory;
 #[derive(Clone)]
 pub struct SearchConsoleMcp {
     pub client: Arc<SearchConsoleClient>,
+    pub scratchpad_sessions: SharedScratchpadSessionManager,
     pub profile: CapabilityProfile,
     pub(crate) tool_inventory: ToolInventory,
     pub(crate) tool_inventory_policy: ToolInventoryPolicy,
@@ -33,11 +35,16 @@ pub struct SearchConsoleMcp {
 }
 
 impl SearchConsoleMcp {
-    pub fn new(client: Arc<SearchConsoleClient>, profile: CapabilityProfile) -> Self {
+    pub fn new(
+        client: Arc<SearchConsoleClient>,
+        profile: CapabilityProfile,
+        scratchpad_sessions: SharedScratchpadSessionManager,
+    ) -> Self {
         let tool_inventory =
             build_tool_inventory().expect("google-search-console-mcp tool inventory should build");
         Self {
             client,
+            scratchpad_sessions,
             profile,
             tool_inventory,
             tool_inventory_policy: tool_inventory_policy_for_profile(profile),
@@ -145,6 +152,7 @@ pub(crate) fn tool_inventory_policy_for_profile(profile: CapabilityProfile) -> T
 mod tests {
     use super::*;
     use crate::config::Settings;
+    use mcp_toolkit_scratchpad::{DuckDbEngine, ScratchpadSessionConfig, ScratchpadSessionManager};
 
     async fn server(profile: CapabilityProfile) -> SearchConsoleMcp {
         let settings = Settings {
@@ -160,6 +168,14 @@ mod tests {
             service_account_json_path: None,
             service_account_json: None,
             max_row_limit: 25_000,
+            scratchpad_session_ttl: std::time::Duration::from_secs(900),
+            scratchpad_max_sessions: 64,
+            scratchpad_max_tables_per_session: 32,
+            scratchpad_max_rows_per_session: 1_000_000,
+            scratchpad_max_memory_mb: 256,
+            scratchpad_query_timeout: std::time::Duration::from_secs(15),
+            scratchpad_max_sql_bytes: 65_536,
+            scratchpad_root_dir: std::env::temp_dir(),
             print_tools: false,
             print_tool_schema: false,
         };
@@ -168,7 +184,22 @@ mod tests {
                 .await
                 .expect("client"),
         );
-        SearchConsoleMcp::new(client, profile)
+        let scratchpad = Arc::new(
+            ScratchpadSessionManager::new(
+                Arc::new(DuckDbEngine::new().expect("duckdb engine")),
+                ScratchpadSessionConfig::new(
+                    settings.scratchpad_session_ttl,
+                    settings.scratchpad_max_sessions,
+                    settings.scratchpad_max_tables_per_session,
+                    settings.scratchpad_max_rows_per_session,
+                    settings.scratchpad_max_memory_mb,
+                )
+                .with_query_timeout(settings.scratchpad_query_timeout)
+                .with_max_sql_bytes(settings.scratchpad_max_sql_bytes),
+            )
+            .expect("scratchpad"),
+        );
+        SearchConsoleMcp::new(client, profile, scratchpad)
     }
 
     #[tokio::test]
@@ -176,6 +207,7 @@ mod tests {
         let server = server(CapabilityProfile::ReadOnly).await;
         assert!(!server.is_tool_allowed("gsc_sitemap_submit"));
         assert!(server.is_tool_allowed("gsc_search_analytics_query"));
+        assert!(server.is_tool_allowed("gsc_scratchpad_query"));
     }
 
     #[tokio::test]
@@ -189,6 +221,7 @@ mod tests {
         let server = server(CapabilityProfile::ReadOnly).await;
         let names = server.tool_names();
         assert!(names.contains(&"gsc_search_analytics_query".to_string()));
+        assert!(names.contains(&"gsc_scratchpad_ingest_search_analytics".to_string()));
         assert!(!names.contains(&"gsc_sitemap_submit".to_string()));
         assert!(!names.contains(&"gsc_site_delete".to_string()));
     }

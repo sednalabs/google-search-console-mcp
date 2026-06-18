@@ -1,5 +1,6 @@
 //! CLI and environment-backed configuration.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -12,6 +13,13 @@ const DEFAULT_INSPECTION_BASE_URL: &str = "https://searchconsole.googleapis.com/
 const DEFAULT_HTTP_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_MAX_ROW_LIMIT: u32 = 25_000;
 const DEFAULT_USER_AGENT: &str = "google-search-console-mcp/0.1.0";
+const DEFAULT_SCRATCHPAD_SESSION_TTL_SECS: u64 = 900;
+const DEFAULT_SCRATCHPAD_MAX_SESSIONS: usize = 64;
+const DEFAULT_SCRATCHPAD_MAX_TABLES_PER_SESSION: usize = 32;
+const DEFAULT_SCRATCHPAD_MAX_ROWS_PER_SESSION: usize = 1_000_000;
+const DEFAULT_SCRATCHPAD_MAX_MEMORY_MB: usize = 256;
+const DEFAULT_SCRATCHPAD_QUERY_TIMEOUT_MS: u64 = 15_000;
+const DEFAULT_SCRATCHPAD_MAX_SQL_BYTES: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
@@ -113,6 +121,66 @@ pub struct Cli {
     )]
     pub max_row_limit: u32,
 
+    /// Scratchpad session TTL in seconds.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS",
+        default_value_t = DEFAULT_SCRATCHPAD_SESSION_TTL_SECS
+    )]
+    pub scratchpad_session_ttl_secs: u64,
+
+    /// Maximum number of active scratchpad sessions.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS",
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_SESSIONS
+    )]
+    pub scratchpad_max_sessions: usize,
+
+    /// Maximum number of tables tracked per scratchpad session.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION",
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_TABLES_PER_SESSION
+    )]
+    pub scratchpad_max_tables_per_session: usize,
+
+    /// Maximum number of rows tracked per scratchpad session.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_ROWS_PER_SESSION",
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_ROWS_PER_SESSION
+    )]
+    pub scratchpad_max_rows_per_session: usize,
+
+    /// Maximum DuckDB memory limit in MB per scratchpad session connection.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_MEMORY_MB",
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_MEMORY_MB
+    )]
+    pub scratchpad_max_memory_mb: usize,
+
+    /// Scratchpad query timeout in milliseconds.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_QUERY_TIMEOUT_MS",
+        default_value_t = DEFAULT_SCRATCHPAD_QUERY_TIMEOUT_MS
+    )]
+    pub scratchpad_query_timeout_ms: u64,
+
+    /// Maximum SQL payload size accepted by scratchpad query guardrails.
+    #[arg(
+        long,
+        env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SQL_BYTES",
+        default_value_t = DEFAULT_SCRATCHPAD_MAX_SQL_BYTES
+    )]
+    pub scratchpad_max_sql_bytes: usize,
+
+    /// Scratchpad database root directory. Defaults to the OS temp directory.
+    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR")]
+    pub scratchpad_root_dir: Option<PathBuf>,
+
     /// Print registered tool names and exit.
     #[arg(long)]
     pub print_tools: bool,
@@ -136,6 +204,14 @@ pub struct Settings {
     pub service_account_json: Option<String>,
     pub quota_project: Option<String>,
     pub max_row_limit: u32,
+    pub scratchpad_session_ttl: Duration,
+    pub scratchpad_max_sessions: usize,
+    pub scratchpad_max_tables_per_session: usize,
+    pub scratchpad_max_rows_per_session: usize,
+    pub scratchpad_max_memory_mb: usize,
+    pub scratchpad_query_timeout: Duration,
+    pub scratchpad_max_sql_bytes: usize,
+    pub scratchpad_root_dir: PathBuf,
     pub print_tools: bool,
     pub print_tool_schema: bool,
 }
@@ -150,6 +226,31 @@ impl Settings {
                 "max row limit must be between 1 and {DEFAULT_MAX_ROW_LIMIT}"
             ));
         }
+        if cli.scratchpad_session_ttl_secs == 0 {
+            return Err(anyhow!("scratchpad session ttl must be greater than zero"));
+        }
+        if cli.scratchpad_max_sessions == 0 {
+            return Err(anyhow!("scratchpad max sessions must be greater than zero"));
+        }
+        if cli.scratchpad_max_tables_per_session == 0 {
+            return Err(anyhow!(
+                "scratchpad max tables per session must be greater than zero"
+            ));
+        }
+        if cli.scratchpad_max_rows_per_session == 0 {
+            return Err(anyhow!(
+                "scratchpad max rows per session must be greater than zero"
+            ));
+        }
+        if cli.scratchpad_max_memory_mb == 0 {
+            return Err(anyhow!("scratchpad max memory mb must be greater than zero"));
+        }
+        if cli.scratchpad_query_timeout_ms == 0 {
+            return Err(anyhow!("scratchpad query timeout must be greater than zero"));
+        }
+        if cli.scratchpad_max_sql_bytes == 0 {
+            return Err(anyhow!("scratchpad max sql bytes must be greater than zero"));
+        }
         Ok(Self {
             profile: cli.profile,
             scope: cli.scope,
@@ -163,6 +264,14 @@ impl Settings {
             service_account_json: cli.service_account_json,
             quota_project: cli.quota_project,
             max_row_limit: cli.max_row_limit,
+            scratchpad_session_ttl: Duration::from_secs(cli.scratchpad_session_ttl_secs),
+            scratchpad_max_sessions: cli.scratchpad_max_sessions,
+            scratchpad_max_tables_per_session: cli.scratchpad_max_tables_per_session,
+            scratchpad_max_rows_per_session: cli.scratchpad_max_rows_per_session,
+            scratchpad_max_memory_mb: cli.scratchpad_max_memory_mb,
+            scratchpad_query_timeout: Duration::from_millis(cli.scratchpad_query_timeout_ms),
+            scratchpad_max_sql_bytes: cli.scratchpad_max_sql_bytes,
+            scratchpad_root_dir: cli.scratchpad_root_dir.unwrap_or_else(std::env::temp_dir),
             print_tools: cli.print_tools,
             print_tool_schema: cli.print_tool_schema,
         })

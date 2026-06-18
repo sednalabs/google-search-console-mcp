@@ -6,6 +6,7 @@ use rmcp::model::CallToolResult;
 use serde_json::{Map, Value, json};
 
 use crate::error::SearchConsoleError;
+use mcp_toolkit_scratchpad::ScratchpadError;
 
 pub fn elapsed_ms(started: Instant) -> u64 {
     let elapsed = started.elapsed().as_millis();
@@ -47,6 +48,23 @@ pub fn error(err: SearchConsoleError, started: Instant) -> CallToolResult {
             "reason": err.reason(),
             "message": redact_secret_text(&err.to_string()),
             "category": err.category(),
+            "hint": err.hint(),
+        },
+        "meta": {
+            "elapsed_ms": elapsed_ms(started),
+        }
+    }))
+}
+
+pub fn scratchpad_error(err: ScratchpadError, started: Instant) -> CallToolResult {
+    CallToolResult::structured(json!({
+        "ok": false,
+        "error": {
+            "code": err.code(),
+            "reason": err.reason(),
+            "message": redact_secret_text(&err.to_string()),
+            "category": err.category(),
+            "detail": err.detail(),
             "hint": err.hint(),
         },
         "meta": {

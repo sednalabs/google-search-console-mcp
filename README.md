@@ -113,6 +113,14 @@ mount a file and can provide the JSON as a sealed secret.
 | `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | unset | Optional `x-goog-user-project` header |
 | `GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS` | `15000` | Upstream request timeout |
 | `GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT` | `25000` | Maximum Search Analytics `rowLimit` |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS` | `900` | Scratchpad session idle TTL |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SESSIONS` | `64` | Maximum active scratchpad sessions |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_TABLES_PER_SESSION` | `32` | Maximum scratchpad tables per session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_ROWS_PER_SESSION` | `1000000` | Maximum scratchpad rows tracked per session |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_MEMORY_MB` | `256` | DuckDB memory limit per scratchpad connection |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_QUERY_TIMEOUT_MS` | `15000` | Scratchpad query timeout |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_MAX_SQL_BYTES` | `65536` | Maximum SQL payload size for scratchpad queries |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_ROOT_DIR` | OS temp dir | Scratchpad database root directory |
 
 ## Tools
 
@@ -123,6 +131,14 @@ mount a file and can provide the JSON as a sealed secret.
 - `gsc_sites_list`
 - `gsc_site_get`
 - `gsc_search_analytics_query`
+- `gsc_scratchpad_open_session`
+- `gsc_scratchpad_close_session`
+- `gsc_scratchpad_list_sessions`
+- `gsc_scratchpad_list_tables`
+- `gsc_scratchpad_drop_table`
+- `gsc_scratchpad_query`
+- `gsc_scratchpad_ingest_search_analytics`
+- `gsc_scratchpad_export_evidence_bundle`
 - `gsc_url_inspection_index_inspect`
 - `gsc_sitemaps_list`
 - `gsc_sitemap_get`
@@ -157,3 +173,7 @@ The server also rejects several invalid Search Analytics combinations before the
 - `search_type=googleNews` and `search_type=discover` do not support the `query` dimension
 - `data_state=hourly_all` requires the `hour` dimension
 - `hour` cannot be combined with `date`; use `hour` alone for hourly rows
+
+For larger evidence passes, use the scratchpad flow instead of returning every row through chat:
+open a session, ingest Search Analytics rows into a named table, query with bounded read-only
+DuckDB SQL, then export a compact markdown evidence bundle.
