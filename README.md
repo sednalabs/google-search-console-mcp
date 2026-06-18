@@ -29,7 +29,8 @@ cargo run -- --print-tools
 The server exposes setup tools that do not return secrets:
 
 - `gsc_get_started` shows the recommended first-run flow.
-- `gsc_auth_status` reports credential source and can optionally verify token acquisition.
+- `gsc_auth_status` reports credential source and can optionally verify token acquisition
+  plus operator write-scope readiness.
 - `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command.
 - `gsc_sites_list` discovers exact Search Console property strings after auth works.
 
@@ -68,6 +69,12 @@ For operator-only sitemap/site mutations, use credentials that have:
 ```text
 https://www.googleapis.com/auth/webmasters
 ```
+
+Before submitting/deleting sitemaps or adding/removing sites, call `gsc_auth_status` with
+`verify_token=true` and confirm:
+
+- `token_check.ok` is `true`
+- `operator_scope_check.ok` is `true`
 
 The server never returns raw tokens, private keys, refresh tokens, or client secrets in tool
 responses.
