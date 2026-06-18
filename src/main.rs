@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
+use mcp_toolkit_scratchpad::{
+    DuckDbEngine, ScratchpadSessionConfig, ScratchpadSessionManager, SharedScratchpadEngine,
+};
 use rmcp::serve_server;
 use rmcp::transport::stdio;
 use tracing_subscriber::EnvFilter;
@@ -40,7 +43,22 @@ async fn run() -> Result<()> {
     }
 
     let client = Arc::new(SearchConsoleClient::from_settings(&settings).await?);
-    let server = SearchConsoleMcp::new(client, settings.profile);
+    let scratchpad_engine: SharedScratchpadEngine = Arc::new(DuckDbEngine::new()?);
+    let scratchpad_config = ScratchpadSessionConfig::new(
+        settings.scratchpad_session_ttl,
+        settings.scratchpad_max_sessions,
+        settings.scratchpad_max_tables_per_session,
+        settings.scratchpad_max_rows_per_session,
+        settings.scratchpad_max_memory_mb,
+    )
+    .with_root_dir(settings.scratchpad_root_dir.clone())
+    .with_query_timeout(settings.scratchpad_query_timeout)
+    .with_max_sql_bytes(settings.scratchpad_max_sql_bytes);
+    let scratchpad_sessions = Arc::new(ScratchpadSessionManager::new(
+        scratchpad_engine,
+        scratchpad_config,
+    )?);
+    let server = SearchConsoleMcp::new(client, settings.profile, scratchpad_sessions);
 
     mcp_toolkit_observability::emit_event(
         mcp_toolkit_observability::Level::INFO,

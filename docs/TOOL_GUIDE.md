@@ -31,6 +31,24 @@ not provide live indexability testing through this method.
 
 Use `gsc_sitemaps_list` and `gsc_sitemap_get` to inspect submitted sitemap metadata.
 
+## Scratchpad Tools
+
+Use the scratchpad flow when Search Analytics evidence is too large or too iterative for a single
+tool response:
+
+1. `gsc_scratchpad_open_session`
+2. `gsc_scratchpad_ingest_search_analytics`
+3. `gsc_scratchpad_query`
+4. `gsc_scratchpad_export_evidence_bundle`
+5. `gsc_scratchpad_close_session`
+
+Scratchpad SQL is guarded by the toolkit read-only policy. Use `SELECT`, `WITH`, `DESCRIBE`,
+`SUMMARIZE`, or `EXPLAIN`; file/external scan helpers and multi-statement SQL are rejected.
+
+The Search Analytics ingest tool creates typed columns for the requested dimensions plus `clicks`,
+`impressions`, `ctr`, and `position`. Use `append=true` only when the target table already exists
+with the same columns.
+
 ## Operator Tools
 
 The following tools are blocked unless `GOOGLE_SEARCH_CONSOLE_MCP_PROFILE=operator`:

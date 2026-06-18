@@ -74,6 +74,69 @@ fn tool_capabilities() -> Vec<ToolCapability> {
             ],
         ),
         cap(
+            "gsc_scratchpad_open_session",
+            "scratchpad",
+            true,
+            "Open or refresh a bounded DuckDB scratchpad session.",
+            ["scratchpad", "duckdb", "session", "open", "evidence"],
+        ),
+        cap(
+            "gsc_scratchpad_close_session",
+            "scratchpad",
+            true,
+            "Close a scratchpad session and remove its local database.",
+            ["scratchpad", "duckdb", "session", "close", "cleanup"],
+        ),
+        cap(
+            "gsc_scratchpad_list_sessions",
+            "scratchpad",
+            true,
+            "List active scratchpad sessions.",
+            ["scratchpad", "duckdb", "session", "list"],
+        ),
+        cap(
+            "gsc_scratchpad_list_tables",
+            "scratchpad",
+            true,
+            "List tables in a scratchpad session.",
+            ["scratchpad", "duckdb", "tables", "schema"],
+        ),
+        cap(
+            "gsc_scratchpad_drop_table",
+            "scratchpad",
+            true,
+            "Drop one table from a scratchpad session.",
+            ["scratchpad", "duckdb", "drop", "table"],
+        ),
+        cap(
+            "gsc_scratchpad_query",
+            "scratchpad",
+            true,
+            "Run bounded read-only DuckDB SQL against scratchpad tables.",
+            ["scratchpad", "duckdb", "sql", "query", "evidence"],
+        ),
+        cap(
+            "gsc_scratchpad_ingest_search_analytics",
+            "scratchpad",
+            true,
+            "Fetch Search Analytics rows and ingest them into a scratchpad table.",
+            [
+                "scratchpad",
+                "search-analytics",
+                "ingest",
+                "clicks",
+                "impressions",
+                "evidence",
+            ],
+        ),
+        cap(
+            "gsc_scratchpad_export_evidence_bundle",
+            "scratchpad",
+            true,
+            "Export a bounded markdown evidence bundle from scratchpad tables.",
+            ["scratchpad", "evidence", "export", "markdown", "bundle"],
+        ),
+        cap(
             "gsc_url_inspection_index_inspect",
             "url_inspection",
             true,
@@ -166,6 +229,26 @@ mod tests {
             results
                 .iter()
                 .any(|result| result.name == "gsc_search_analytics_query")
+        );
+    }
+
+    #[test]
+    fn inventory_search_finds_scratchpad_tools() {
+        let inventory = build_tool_inventory().expect("inventory");
+        let results = inventory.search(
+            &ToolSearchFilter {
+                query: Some("scratchpad evidence".to_string()),
+                group: Some("scratchpad".to_string()),
+                read_only: Some(true),
+                limit: Some(10),
+            },
+            ToolOperation::List,
+            &ToolInventoryPolicy::strict(),
+        );
+        assert!(
+            results
+                .iter()
+                .any(|result| result.name == "gsc_scratchpad_ingest_search_analytics")
         );
     }
 }
