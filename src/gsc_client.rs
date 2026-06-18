@@ -1098,8 +1098,7 @@ mod tests {
             start_row: None,
             data_state: Some("hourly_all".to_string()),
         };
-        let err =
-            validate_search_analytics_request(&request).expect_err("date and hour conflict");
+        let err = validate_search_analytics_request(&request).expect_err("date and hour conflict");
         assert!(
             matches!(err, SearchConsoleError::InvalidArgument { field, message } if field == "dimensions" && message.contains("cannot be combined"))
         );
