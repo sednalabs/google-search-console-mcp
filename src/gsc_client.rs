@@ -1370,6 +1370,7 @@ mod tests {
             service_account_json_path: None,
             service_account_json: None,
             quota_project: None,
+            shared_adc: false,
             max_row_limit: 25_000,
             scratchpad_session_ttl: Duration::from_secs(900),
             scratchpad_max_sessions: 64,

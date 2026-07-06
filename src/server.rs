@@ -165,6 +165,7 @@ mod tests {
             oauth_client_secret_json: None,
             oauth_refresh_token: None,
             quota_project: None,
+            shared_adc: false,
             service_account_json_path: None,
             service_account_json: None,
             max_row_limit: 25_000,
