@@ -599,9 +599,11 @@ impl SearchConsoleClient {
                 )));
             }
         };
-        let provider = Arc::new(RefreshTokenProvider::new(adc.into_refresh_config()).map_err(
-            |err| SearchConsoleError::AuthBootstrap(format!("invalid authorized-user ADC: {err}")),
-        )?);
+        let provider = Arc::new(
+            RefreshTokenProvider::new(adc.into_refresh_config()).map_err(|err| {
+                SearchConsoleError::AuthBootstrap(format!("invalid authorized-user ADC: {err}"))
+            })?,
+        );
         let provider = self
             .oauth_token_provider
             .get_or_init(|| async { provider })
