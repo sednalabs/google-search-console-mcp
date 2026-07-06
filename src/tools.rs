@@ -534,7 +534,7 @@ impl SearchConsoleMcp {
                 "next_steps": setup_plan.next_steps.clone(),
                 "notes": [
                     "By default this command writes a Google Search Console-specific ADC file for this OS user.",
-                    "Set shared_adc=true only when you intentionally want the conventional shared gcloud ADC file.",
+                    "Set shared_adc=true only when you intentionally want the conventional shared gcloud ADC file; set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true when the runtime should use it.",
                     "No token or client secret is returned by this tool.",
                     "Use write_scope=true only when preparing credentials for operator sitemap/site mutations."
                 ],
@@ -1314,11 +1314,29 @@ fn auth_env_presence() -> Value {
         "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON": std::env::var_os("GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON").is_some(),
         "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON": std::env::var_os("GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON").is_some(),
         "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN": std::env::var_os("GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN").is_some(),
+        "GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC": env_bool_true("GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC"),
         "CLOUDSDK_CONFIG": std::env::var_os("CLOUDSDK_CONFIG").is_some(),
     })
 }
 
 fn selected_adc_file_status() -> Value {
+    if env_bool_true("GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC") {
+        return conventional_adc_credentials_path()
+            .map(|path| {
+                json!({
+                    "kind": "shared",
+                    "role": "explicit",
+                    "path": path.display().to_string()
+                })
+            })
+            .unwrap_or_else(|| {
+                json!({
+                    "kind": "shared",
+                    "role": "explicit",
+                    "path": null
+                })
+            });
+    }
     if let Some(path) = server_adc_credentials_path() {
         return json!({
             "kind": "server_specific",
@@ -1326,21 +1344,22 @@ fn selected_adc_file_status() -> Value {
             "path": path.display().to_string()
         });
     }
-    conventional_adc_credentials_path()
-        .map(|path| {
-            json!({
-                "kind": "shared",
-                "role": "fallback",
-                "path": path.display().to_string()
-            })
+    json!({
+        "kind": "unknown",
+        "role": "not_configured",
+        "path": null
+    })
+}
+
+fn env_bool_true(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
         })
-        .unwrap_or_else(|| {
-            json!({
-                "kind": "unknown",
-                "role": "fallback",
-                "path": null
-            })
-        })
+        .unwrap_or(false)
 }
 
 fn operator_scope_check_to_json(check: OperatorScopeCheck) -> Value {

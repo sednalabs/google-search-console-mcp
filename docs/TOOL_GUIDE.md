@@ -12,7 +12,9 @@ returns the token.
 Use `gsc_auth_login_command` for a copyable Application Default Credentials command. The command
 writes to a Search Console-specific gcloud config directory by default so sibling Google MCPs keep
 their own tokens and scopes. Set `shared_adc=true` only when you intentionally want the conventional
-shared gcloud ADC file. Set `write_scope=true` only when preparing to run operator tools.
+shared gcloud ADC file; set `GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or start the server with
+`--shared-adc` when the runtime should use that shared file. Set `write_scope=true` only when
+preparing to run operator tools.
 
 ## Read Tools
 

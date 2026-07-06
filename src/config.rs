@@ -114,6 +114,10 @@ pub struct Cli {
     #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT")]
     pub quota_project: Option<String>,
 
+    /// Intentionally use conventional shared gcloud ADC instead of the server-specific ADC file.
+    #[arg(long, env = "GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC")]
+    pub shared_adc: bool,
+
     /// Maximum allowed Search Analytics rowLimit.
     #[arg(
         long,
@@ -204,6 +208,7 @@ pub struct Settings {
     pub service_account_json_path: Option<String>,
     pub service_account_json: Option<String>,
     pub quota_project: Option<String>,
+    pub shared_adc: bool,
     pub max_row_limit: u32,
     pub scratchpad_session_ttl: Duration,
     pub scratchpad_max_sessions: usize,
@@ -270,6 +275,7 @@ impl Settings {
             service_account_json_path: cli.service_account_json_path,
             service_account_json: cli.service_account_json,
             quota_project: cli.quota_project,
+            shared_adc: cli.shared_adc,
             max_row_limit: cli.max_row_limit,
             scratchpad_session_ttl: Duration::from_secs(cli.scratchpad_session_ttl_secs),
             scratchpad_max_sessions: cli.scratchpad_max_sessions,
@@ -290,7 +296,11 @@ fn trim_trailing_slash(value: String) -> String {
 }
 
 pub fn adc_credentials_path() -> Option<PathBuf> {
-    server_adc_credentials_path().or_else(conventional_adc_credentials_path)
+    if shared_adc_env_enabled() {
+        conventional_adc_credentials_path()
+    } else {
+        server_adc_credentials_path()
+    }
 }
 
 pub fn server_adc_credentials_path() -> Option<PathBuf> {
@@ -344,4 +354,15 @@ fn config_root() -> Option<PathBuf> {
             .filter(|value| !value.is_empty())
             .map(|home| PathBuf::from(home).join(".config"))
     }
+}
+
+fn shared_adc_env_enabled() -> bool {
+    env::var("GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }

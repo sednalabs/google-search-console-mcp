@@ -117,7 +117,7 @@ enum UpstreamAuthMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthSource {
     GoogleDefaultProviderChain,
-    GoogleAuthorizedUserAdcFileOrDefaultProviderChain,
+    GoogleAuthorizedUserAdcFile,
     ServiceAccountJsonPath,
     ServiceAccountJsonEnv,
     OAuthRefreshToken,
@@ -127,9 +127,7 @@ impl AuthSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GoogleDefaultProviderChain => "google_default_provider_chain",
-            Self::GoogleAuthorizedUserAdcFileOrDefaultProviderChain => {
-                "google_authorized_user_adc_file_or_default_provider_chain"
-            }
+            Self::GoogleAuthorizedUserAdcFile => "google_authorized_user_adc_file",
             Self::ServiceAccountJsonPath => "service_account_json_path",
             Self::ServiceAccountJsonEnv => "service_account_json_env",
             Self::OAuthRefreshToken => "oauth_refresh_token",
@@ -206,9 +204,7 @@ impl SearchConsoleClient {
     pub fn auth_source(&self) -> AuthSource {
         match &self.auth_mode {
             UpstreamAuthMode::Adc => AuthSource::GoogleDefaultProviderChain,
-            UpstreamAuthMode::AuthorizedUserAdcFile(_) => {
-                AuthSource::GoogleAuthorizedUserAdcFileOrDefaultProviderChain
-            }
+            UpstreamAuthMode::AuthorizedUserAdcFile(_) => AuthSource::GoogleAuthorizedUserAdcFile,
             UpstreamAuthMode::ServiceAccount { source, .. } => *source,
             UpstreamAuthMode::OAuthRefresh(_) => AuthSource::OAuthRefreshToken,
         }
@@ -560,10 +556,13 @@ impl SearchConsoleClient {
             .token_provider
             .get_or_try_init(|| async {
                 match &self.auth_mode {
-                    UpstreamAuthMode::Adc | UpstreamAuthMode::AuthorizedUserAdcFile(_) => {
-                        gcp_auth::provider()
-                            .await
-                            .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string()))
+                    UpstreamAuthMode::Adc => gcp_auth::provider()
+                        .await
+                        .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string())),
+                    UpstreamAuthMode::AuthorizedUserAdcFile(_) => {
+                        Err(SearchConsoleError::AuthBootstrap(
+                            "server-specific authorized-user ADC is handled by the toolkit refresh-token provider".to_string(),
+                        ))
                     }
                     UpstreamAuthMode::ServiceAccount { provider, .. } => Ok(provider.clone()),
                     UpstreamAuthMode::OAuthRefresh(_) => Err(SearchConsoleError::AuthBootstrap(
@@ -612,30 +611,24 @@ impl SearchConsoleClient {
     }
 
     async fn access_token(&self) -> Result<String, SearchConsoleError> {
-        let preferred_oauth_provider =
-            if matches!(&self.auth_mode, UpstreamAuthMode::AuthorizedUserAdcFile(_)) {
-                self.authorized_user_adc_provider().await?
-            } else {
-                None
-            };
-        if let Some(provider) = preferred_oauth_provider {
-            let token = provider
-                .access_token()
-                .await
-                .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string()))?;
-            return Ok(token.expose_secret().to_string());
-        }
-
         match &self.auth_mode {
             UpstreamAuthMode::Adc => {
                 let provider = self.token_provider().await?;
                 let token = provider.token(&[self.scope.as_ref()]).await?;
                 Ok(token.as_str().to_string())
             }
-            UpstreamAuthMode::AuthorizedUserAdcFile(_) => {
-                let provider = self.token_provider().await?;
-                let token = provider.token(&[self.scope.as_ref()]).await?;
-                Ok(token.as_str().to_string())
+            UpstreamAuthMode::AuthorizedUserAdcFile(path) => {
+                let provider = self.authorized_user_adc_provider().await?.ok_or_else(|| {
+                    SearchConsoleError::AuthBootstrap(format!(
+                        "server-specific Google Search Console ADC file was not found at '{}'; run `google-search-console-mcp auth login` or set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true to intentionally use conventional shared ADC",
+                        path.display()
+                    ))
+                })?;
+                let token = provider
+                    .access_token()
+                    .await
+                    .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string()))?;
+                Ok(token.expose_secret().to_string())
             }
             UpstreamAuthMode::ServiceAccount { provider, .. } => {
                 let token = provider.token(&[self.scope.as_ref()]).await?;
@@ -774,13 +767,16 @@ fn select_auth_mode(settings: &Settings) -> Result<UpstreamAuthMode, SearchConso
             Arc::new(parse_oauth_refresh_config(client_secret_path, refresh_token)?),
         )),
         (None, None) => {
-            if std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS").is_some() {
+            if std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS").is_some() || settings.shared_adc
+            {
                 return Ok(UpstreamAuthMode::Adc);
             }
             if let Some(path) = crate::config::server_adc_credentials_path() {
                 return Ok(UpstreamAuthMode::AuthorizedUserAdcFile(path));
             }
-            Ok(UpstreamAuthMode::Adc)
+            Err(SearchConsoleError::AuthBootstrap(
+                "failed to determine the server-specific Google Search Console ADC path; set HOME/XDG_CONFIG_HOME on Unix or APPDATA on Windows, or set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true to intentionally use conventional shared ADC".to_string(),
+            ))
         }
         _ => Err(SearchConsoleError::AuthBootstrap(
             "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON and GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN must both be set or both be unset; refusing to fall back to ADC with partial OAuth configuration".to_string(),

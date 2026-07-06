@@ -59,8 +59,8 @@ Supported credential sources, in precedence order:
 - Standard Google credentials selected by `GOOGLE_APPLICATION_CREDENTIALS`.
 - Search Console-specific local ADC at
   `<user-config>/google-search-console-mcp/gcloud/application_default_credentials.json`.
-- Conventional shared ADC as a compatibility fallback when the server-specific file has not been
-  created yet.
+- Conventional shared ADC only when explicitly enabled with
+  `GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or `--shared-adc`.
 
 For operator-only sitemap/site mutations, use credentials that have:
 
@@ -81,7 +81,9 @@ responses.
 
 `gsc_auth_login_command` targets a Search Console-specific Cloud SDK config directory by default so
 Ad Manager, GA4, and other Google MCPs can keep their own OAuth grants and scopes. Set
-`shared_adc=true` only when you intentionally want the conventional shared gcloud ADC file.
+`shared_adc=true` only when you intentionally want the conventional shared gcloud ADC file. To make
+the running server use that shared ADC file, also set
+`GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or start the binary with `--shared-adc`.
 
 For read-only use:
 
