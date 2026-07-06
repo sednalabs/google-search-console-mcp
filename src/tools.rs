@@ -1378,21 +1378,23 @@ fn auth_next_steps(
     operator_scope_ok: Option<bool>,
     current_scope: &str,
 ) -> Vec<String> {
+    let config_dir = server_cloudsdk_config_dir();
+    let config_dir_ref = config_dir.as_deref();
     let current_login = shell_join_with_cloudsdk_config(
         &gcloud_adc_login_command(current_scope, None, true),
-        server_cloudsdk_config_dir().as_deref(),
+        config_dir_ref,
     );
     let read_login = shell_join_with_cloudsdk_config(
         &gcloud_adc_login_command(DEFAULT_SCOPE, None, true),
-        server_cloudsdk_config_dir().as_deref(),
+        config_dir_ref,
     );
     let operator_login = shell_join_with_cloudsdk_config(
         &gcloud_adc_login_command(WRITE_SCOPE, None, true),
-        server_cloudsdk_config_dir().as_deref(),
+        config_dir_ref,
     );
     let quota_project_command = shell_join_with_cloudsdk_config(
         &gcloud_set_quota_project_command("YOUR_PROJECT"),
-        server_cloudsdk_config_dir().as_deref(),
+        config_dir_ref,
     );
 
     match (
@@ -1457,15 +1459,26 @@ fn shell_join(parts: &[String]) -> String {
 
 fn shell_join_with_cloudsdk_config(parts: &[String], cloudsdk_config: Option<&Path>) -> String {
     if let Some(dir) = cloudsdk_config {
-        let assignment = format!(
-            "CLOUDSDK_CONFIG={}",
-            shell_join(&[dir.display().to_string()])
-        );
+        let dir_str = shell_join(&[dir.display().to_string()]);
         let command = shell_join(parts);
         if command.is_empty() {
-            assignment
+            #[cfg(windows)]
+            {
+                format!("$env:CLOUDSDK_CONFIG={dir_str}")
+            }
+            #[cfg(not(windows))]
+            {
+                format!("CLOUDSDK_CONFIG={dir_str}")
+            }
         } else {
-            format!("{assignment} {command}")
+            #[cfg(windows)]
+            {
+                format!("$env:CLOUDSDK_CONFIG={dir_str}; {command}")
+            }
+            #[cfg(not(windows))]
+            {
+                format!("CLOUDSDK_CONFIG={dir_str} {command}")
+            }
         }
     } else {
         shell_join(parts)
@@ -1502,5 +1515,19 @@ mod tests {
         assert!(!redacted.contains("abc"));
         assert!(!redacted.contains("xyz"));
         assert!(redacted.contains("[redacted]"));
+    }
+
+    #[test]
+    fn cloudsdk_config_command_is_shell_appropriate() {
+        let command = shell_join_with_cloudsdk_config(
+            &["gcloud".to_string(), "auth".to_string()],
+            Some(Path::new("/tmp/gsc adc")),
+        );
+
+        #[cfg(windows)]
+        assert!(command.starts_with("$env:CLOUDSDK_CONFIG="));
+
+        #[cfg(not(windows))]
+        assert!(command.starts_with("CLOUDSDK_CONFIG='/tmp/gsc adc' gcloud auth"));
     }
 }
