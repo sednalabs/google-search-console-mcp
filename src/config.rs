@@ -1,5 +1,6 @@
 //! CLI and environment-backed configuration.
 
+use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -286,4 +287,61 @@ impl Settings {
 
 fn trim_trailing_slash(value: String) -> String {
     value.trim_end_matches('/').to_string()
+}
+
+pub fn adc_credentials_path() -> Option<PathBuf> {
+    server_adc_credentials_path().or_else(conventional_adc_credentials_path)
+}
+
+pub fn server_adc_credentials_path() -> Option<PathBuf> {
+    server_cloudsdk_config_dir().map(|path| path.join("application_default_credentials.json"))
+}
+
+pub fn server_cloudsdk_config_dir() -> Option<PathBuf> {
+    config_root().map(|root| root.join("google-search-console-mcp").join("gcloud"))
+}
+
+pub fn conventional_adc_credentials_path() -> Option<PathBuf> {
+    if let Some(config_dir) = env::var_os("CLOUDSDK_CONFIG").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(config_dir).join("application_default_credentials.json"));
+    }
+    #[cfg(windows)]
+    {
+        env::var_os("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(|appdata| {
+                PathBuf::from(appdata)
+                    .join("gcloud")
+                    .join("application_default_credentials.json")
+            })
+    }
+    #[cfg(not(windows))]
+    {
+        env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(|home| {
+                PathBuf::from(home)
+                    .join(".config")
+                    .join("gcloud")
+                    .join("application_default_credentials.json")
+            })
+    }
+}
+
+fn config_root() -> Option<PathBuf> {
+    if let Some(dir) = env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    #[cfg(windows)]
+    {
+        env::var_os("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(|home| PathBuf::from(home).join(".config"))
+    }
 }

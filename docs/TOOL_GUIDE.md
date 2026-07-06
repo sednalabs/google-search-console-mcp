@@ -9,8 +9,10 @@ Use `gsc_auth_status` to inspect auth configuration. Set `verify_token=true` whe
 token acquisition and, for operator/write-scope runs, the `operator_scope_check`; the tool never
 returns the token.
 
-Use `gsc_auth_login_command` for a copyable Application Default Credentials command. Set
-`write_scope=true` only when preparing to run operator tools.
+Use `gsc_auth_login_command` for a copyable Application Default Credentials command. The command
+writes to a Search Console-specific gcloud config directory by default so sibling Google MCPs keep
+their own tokens and scopes. Set `shared_adc=true` only when you intentionally want the conventional
+shared gcloud ADC file. Set `write_scope=true` only when preparing to run operator tools.
 
 ## Read Tools
 

@@ -1,5 +1,10 @@
+use std::path::Path;
 use std::time::Instant;
 
+use mcp_toolkit_auth::provider_auth::{
+    GoogleProviderAuthConfig, GoogleProviderAuthSetupPlan, format_provider_auth_command,
+    google_adc_quota_project_command,
+};
 use mcp_toolkit_core::tool_inventory::{ToolOperation, ToolSearchFilter, ToolSearchResponse};
 use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
 use mcp_toolkit_scratchpad::{
@@ -14,8 +19,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::config::{CapabilityProfile, WRITE_SCOPE};
+use crate::config::{
+    CapabilityProfile, DEFAULT_SCOPE, WRITE_SCOPE, conventional_adc_credentials_path,
+    server_adc_credentials_path, server_cloudsdk_config_dir,
+};
 use crate::contract;
+use crate::error::SearchConsoleError;
 use crate::gsc_client::{OperatorScopeCheck, SearchAnalyticsRequest};
 use crate::server::{SearchConsoleMcp, tool_inventory_policy_for_profile};
 use crate::tool_surface::build_tool_inventory;
@@ -57,6 +66,18 @@ pub struct AuthLoginCommandArgs {
     /// Use the write-capable Search Console scope needed for operator sitemap/site mutations.
     #[serde(default)]
     pub write_scope: bool,
+    /// Include the headless browser flag for SSH or remote environments.
+    #[serde(default)]
+    pub headless: bool,
+    /// Optional Google OAuth client id file for gcloud ADC login.
+    #[serde(default)]
+    pub client_id_file: Option<String>,
+    /// Optional quota project to include as a follow-up command.
+    #[serde(default)]
+    pub quota_project: Option<String>,
+    /// Use the conventional shared gcloud ADC file instead of the server-specific file.
+    #[serde(default)]
+    pub shared_adc: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -414,6 +435,7 @@ impl SearchConsoleMcp {
                 "profile": self.profile.as_str(),
                 "operator_tools_enabled": self.profile.allows_mutation(),
                 "quota_project_configured": self.client.quota_project_configured(),
+                "adc_file": selected_adc_file_status(),
                 "detected_env": auth_env_presence(),
                 "token_check": token_check,
                 "operator_scope_check": operator_scope_check,
@@ -422,6 +444,7 @@ impl SearchConsoleMcp {
                     token_ok,
                     operator_scope_relevant,
                     operator_scope_ok,
+                    self.client.scope(),
                 ),
                 "secrets_returned": false
             }),
@@ -444,11 +467,77 @@ impl SearchConsoleMcp {
         } else {
             self.client.scope()
         };
+        let shared_adc = args.shared_adc.unwrap_or(false);
+        let cloudsdk_config = if shared_adc {
+            None
+        } else {
+            server_cloudsdk_config_dir()
+        };
+        if !shared_adc && cloudsdk_config.is_none() {
+            return Ok(contract::error(
+                SearchConsoleError::invalid(
+                    "shared_adc",
+                    "failed to determine the server-specific gcloud config directory; set HOME/XDG_CONFIG_HOME on Unix or APPDATA on Windows, or pass shared_adc=true to intentionally use conventional shared ADC",
+                ),
+                started,
+            ));
+        }
+        let credential_file = if shared_adc {
+            conventional_adc_credentials_path()
+        } else {
+            server_adc_credentials_path()
+        };
+        let command = gcloud_adc_login_command(
+            scope,
+            args.client_id_file.as_deref().map(Path::new),
+            args.headless,
+        );
+        let headless_command =
+            gcloud_adc_login_command(scope, args.client_id_file.as_deref().map(Path::new), true);
+        let setup_plan = gsc_auth_setup_plan(scope);
+        let quota_project = args.quota_project.as_deref();
+        let follow_up_commands = quota_project
+            .map(|project| {
+                vec![shell_join_with_cloudsdk_config(
+                    &gcloud_set_quota_project_command(project),
+                    cloudsdk_config.as_deref(),
+                )]
+            })
+            .unwrap_or_default();
         Ok(contract::success(
             json!({
-                "command": format!("gcloud auth application-default login --scopes={scope}"),
+                "command": shell_join_with_cloudsdk_config(&command, cloudsdk_config.as_deref()),
+                "headless_command": shell_join_with_cloudsdk_config(&headless_command, cloudsdk_config.as_deref()),
+                "client_id_file_command": shell_join_with_cloudsdk_config(
+                    &gcloud_adc_login_command(scope, Some(Path::new("/path/to/client_id.json")), args.headless),
+                    cloudsdk_config.as_deref(),
+                ),
+                "client_id_file_headless_command": shell_join_with_cloudsdk_config(
+                    &gcloud_adc_login_command(scope, Some(Path::new("/path/to/client_id.json")), true),
+                    cloudsdk_config.as_deref(),
+                ),
+                "quota_project_command": shell_join_with_cloudsdk_config(
+                    &gcloud_set_quota_project_command("YOUR_PROJECT"),
+                    cloudsdk_config.as_deref(),
+                ),
+                "api_enable_command": setup_plan.api_enable.as_ref().map(|command| command.shell.as_str()),
+                "follow_up_commands": follow_up_commands,
+                "adc_scopes": setup_plan.scopes.clone(),
+                "cloudsdk_config": cloudsdk_config.as_ref().map(|path| path.display().to_string()),
+                "credential_file": credential_file.as_ref().map(|path| path.display().to_string()),
+                "shared_adc": shared_adc,
                 "scope": scope,
                 "write_scope": args.write_scope,
+                "headless": args.headless,
+                "client_id_file": args.client_id_file,
+                "quota_project": args.quota_project,
+                "next_steps": setup_plan.next_steps.clone(),
+                "notes": [
+                    "By default this command writes a Google Search Console-specific ADC file for this OS user.",
+                    "Set shared_adc=true only when you intentionally want the conventional shared gcloud ADC file.",
+                    "No token or client secret is returned by this tool.",
+                    "Use write_scope=true only when preparing credentials for operator sitemap/site mutations."
+                ],
                 "after_login": "Restart stdio MCP clients that keep long-lived server processes, then call gsc_auth_status with verify_token=true.",
                 "service_account_alternative": {
                     "standard_env": "GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json",
@@ -1229,6 +1318,31 @@ fn auth_env_presence() -> Value {
     })
 }
 
+fn selected_adc_file_status() -> Value {
+    if let Some(path) = server_adc_credentials_path() {
+        return json!({
+            "kind": "server_specific",
+            "role": "preferred",
+            "path": path.display().to_string()
+        });
+    }
+    conventional_adc_credentials_path()
+        .map(|path| {
+            json!({
+                "kind": "shared",
+                "role": "fallback",
+                "path": path.display().to_string()
+            })
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "kind": "unknown",
+                "role": "fallback",
+                "path": null
+            })
+        })
+}
+
 fn operator_scope_check_to_json(check: OperatorScopeCheck) -> Value {
     json!({
         "checked": true,
@@ -1243,7 +1357,25 @@ fn auth_next_steps(
     token_ok: Option<bool>,
     operator_scope_relevant: bool,
     operator_scope_ok: Option<bool>,
-) -> Vec<&'static str> {
+    current_scope: &str,
+) -> Vec<String> {
+    let current_login = shell_join_with_cloudsdk_config(
+        &gcloud_adc_login_command(current_scope, None, true),
+        server_cloudsdk_config_dir().as_deref(),
+    );
+    let read_login = shell_join_with_cloudsdk_config(
+        &gcloud_adc_login_command(DEFAULT_SCOPE, None, true),
+        server_cloudsdk_config_dir().as_deref(),
+    );
+    let operator_login = shell_join_with_cloudsdk_config(
+        &gcloud_adc_login_command(WRITE_SCOPE, None, true),
+        server_cloudsdk_config_dir().as_deref(),
+    );
+    let quota_project_command = shell_join_with_cloudsdk_config(
+        &gcloud_set_quota_project_command("YOUR_PROJECT"),
+        server_cloudsdk_config_dir().as_deref(),
+    );
+
     match (
         verified,
         token_ok,
@@ -1251,24 +1383,73 @@ fn auth_next_steps(
         operator_scope_ok,
     ) {
         (false, _, _, _) => vec![
-            "Run gsc_auth_status with verify_token=true when you are ready to prove credentials.",
-            "If credentials are missing, call gsc_auth_login_command for the local ADC command.",
-            "Call gsc_sites_list after auth is verified to discover exact property strings.",
+            "Run gsc_auth_status with verify_token=true when you are ready to prove credentials.".to_string(),
+            format!("If credentials are missing, call gsc_auth_login_command or run `{current_login}` for local ADC."),
+            format!("Set an ADC quota project if Google asks for one: `{quota_project_command}`."),
+            "Call gsc_sites_list after auth is verified to discover exact property strings.".to_string(),
         ],
         (true, Some(true), true, Some(false) | None) => vec![
-            "Run gsc_auth_login_command with write_scope=true and reauthenticate with the webmasters scope.",
-            "Set a quota project if Google reports that local ADC credentials require one.",
-            "Call gsc_auth_status with verify_token=true again before sitemap/site mutations.",
+            format!("Run gsc_auth_login_command with write_scope=true or reauthenticate with `{operator_login}`."),
+            format!("Set a quota project if Google reports that local ADC credentials require one: `{quota_project_command}`."),
+            "Call gsc_auth_status with verify_token=true again before sitemap/site mutations.".to_string(),
         ],
         (true, Some(true), _, _) => vec![
-            "Call gsc_sites_list to discover exact property strings.",
-            "Use gsc_search_analytics_query for Search Console performance data.",
+            "Call gsc_sites_list to discover exact property strings.".to_string(),
+            "Use gsc_search_analytics_query for Search Console performance data.".to_string(),
         ],
         (true, Some(false), _, _) | (true, None, _, _) => vec![
-            "Call gsc_auth_login_command and run the returned command for local ADC.",
-            "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.",
-            "Ensure the authenticated principal has access to the Search Console property.",
+            format!("Call gsc_auth_login_command and run the returned command for local ADC, or run `{read_login}`."),
+            format!("If Google reports a quota-project problem, run `{quota_project_command}` and enable searchconsole.googleapis.com on that project."),
+            "For service accounts, set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH.".to_string(),
+            "Ensure the authenticated principal has access to the Search Console property.".to_string(),
         ],
+    }
+}
+
+fn gsc_auth_setup_plan(scope: &str) -> GoogleProviderAuthSetupPlan {
+    gsc_provider_auth_config(scope).adc_setup_plan()
+}
+
+fn gsc_provider_auth_config(scope: &str) -> GoogleProviderAuthConfig {
+    GoogleProviderAuthConfig::new("Search Console API", vec![scope.to_string()])
+        .with_api_service_name("searchconsole.googleapis.com")
+}
+
+fn gcloud_adc_login_command(
+    scope: &str,
+    client_id_file: Option<&Path>,
+    headless: bool,
+) -> Vec<String> {
+    let config = gsc_provider_auth_config(scope);
+    if let Some(path) = client_id_file {
+        config.adc_login_command_with_client_id_file(headless, &path.display().to_string())
+    } else {
+        config.adc_login_command(headless)
+    }
+}
+
+fn gcloud_set_quota_project_command(project: &str) -> Vec<String> {
+    google_adc_quota_project_command(project)
+}
+
+fn shell_join(parts: &[String]) -> String {
+    format_provider_auth_command(parts)
+}
+
+fn shell_join_with_cloudsdk_config(parts: &[String], cloudsdk_config: Option<&Path>) -> String {
+    if let Some(dir) = cloudsdk_config {
+        let assignment = format!(
+            "CLOUDSDK_CONFIG={}",
+            shell_join(&[dir.display().to_string()])
+        );
+        let command = shell_join(parts);
+        if command.is_empty() {
+            assignment
+        } else {
+            format!("{assignment} {command}")
+        }
+    } else {
+        shell_join(parts)
     }
 }
 

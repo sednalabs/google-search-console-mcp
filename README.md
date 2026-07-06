@@ -31,17 +31,12 @@ The server exposes setup tools that do not return secrets:
 - `gsc_get_started` shows the recommended first-run flow.
 - `gsc_auth_status` reports credential source and can optionally verify token acquisition
   plus operator write-scope readiness.
-- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command.
+- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command
+  that writes to a Search Console-specific credential file by default.
 - `gsc_sites_list` discovers exact Search Console property strings after auth works.
 
-For local use, the lowest-friction path is usually:
-
-```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters.readonly
-```
-
-Then restart any stdio MCP client that keeps long-lived child processes and call
+For local use, call the MCP setup tool `gsc_auth_login_command`, run the returned shell command,
+then restart any stdio MCP client that keeps long-lived child processes and call
 `gsc_auth_status` with `verify_token=true`.
 
 ## Authentication
@@ -53,16 +48,19 @@ the read-only Search Console scope:
 https://www.googleapis.com/auth/webmasters.readonly
 ```
 
-Supported credential sources:
+Supported credential sources, in precedence order:
 
-- Application Default Credentials from `gcloud auth application-default login`.
-- Standard service-account file via `GOOGLE_APPLICATION_CREDENTIALS`.
+- Server-specific raw service-account JSON via `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON`.
 - Server-specific service-account file via
   `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH`.
-- Server-specific raw service-account JSON via `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON`.
 - OAuth refresh-token auth via
   `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON` and
   `GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN`.
+- Standard Google credentials selected by `GOOGLE_APPLICATION_CREDENTIALS`.
+- Search Console-specific local ADC at
+  `<user-config>/google-search-console-mcp/gcloud/application_default_credentials.json`.
+- Conventional shared ADC as a compatibility fallback when the server-specific file has not been
+  created yet.
 
 For operator-only sitemap/site mutations, use credentials that have:
 
@@ -81,18 +79,24 @@ responses.
 
 ### Application Default Credentials
 
+`gsc_auth_login_command` targets a Search Console-specific Cloud SDK config directory by default so
+Ad Manager, GA4, and other Google MCPs can keep their own OAuth grants and scopes. Set
+`shared_adc=true` only when you intentionally want the conventional shared gcloud ADC file.
+
 For read-only use:
 
 ```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters.readonly
+CLOUDSDK_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/google-search-console-mcp/gcloud" \
+  gcloud auth application-default login \
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters.readonly
 ```
 
 For operator use:
 
 ```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/webmasters
+CLOUDSDK_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/google-search-console-mcp/gcloud" \
+  gcloud auth application-default login \
+  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/webmasters
 ```
 
 ### Service Accounts
