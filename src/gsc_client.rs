@@ -1,10 +1,15 @@
 //! Thin authenticated adapter for Google Search Console REST APIs.
 
 use std::fs;
+use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
+use mcp_toolkit_auth::upstream_oauth::{
+    RefreshTokenProvider, UpstreamOAuthError, google_authorized_user_adc_from_file,
+};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use reqwest::{Client, Method, RequestBuilder, Url};
@@ -101,6 +106,7 @@ pub struct OperatorScopeCheck {
 #[derive(Clone)]
 enum UpstreamAuthMode {
     Adc,
+    AuthorizedUserAdcFile(PathBuf),
     ServiceAccount {
         provider: Arc<dyn TokenProvider>,
         source: AuthSource,
@@ -111,6 +117,7 @@ enum UpstreamAuthMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthSource {
     GoogleDefaultProviderChain,
+    GoogleAuthorizedUserAdcFile,
     ServiceAccountJsonPath,
     ServiceAccountJsonEnv,
     OAuthRefreshToken,
@@ -120,6 +127,7 @@ impl AuthSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GoogleDefaultProviderChain => "google_default_provider_chain",
+            Self::GoogleAuthorizedUserAdcFile => "google_authorized_user_adc_file",
             Self::ServiceAccountJsonPath => "service_account_json_path",
             Self::ServiceAccountJsonEnv => "service_account_json_env",
             Self::OAuthRefreshToken => "oauth_refresh_token",
@@ -132,6 +140,7 @@ pub struct SearchConsoleClient {
     http: Client,
     auth_mode: UpstreamAuthMode,
     token_provider: Arc<OnceCell<Arc<dyn TokenProvider>>>,
+    oauth_token_provider: Arc<OnceCell<Arc<RefreshTokenProvider>>>,
     cached_oauth_token: Arc<RwLock<Option<CachedAccessToken>>>,
     scope: Arc<str>,
     api_base_url: Arc<str>,
@@ -174,6 +183,7 @@ impl SearchConsoleClient {
             http,
             auth_mode,
             token_provider: Arc::new(OnceCell::new()),
+            oauth_token_provider: Arc::new(OnceCell::new()),
             cached_oauth_token: Arc::new(RwLock::new(None)),
             scope: settings.scope.clone().into(),
             api_base_url: settings.api_base_url.clone().into(),
@@ -194,6 +204,7 @@ impl SearchConsoleClient {
     pub fn auth_source(&self) -> AuthSource {
         match &self.auth_mode {
             UpstreamAuthMode::Adc => AuthSource::GoogleDefaultProviderChain,
+            UpstreamAuthMode::AuthorizedUserAdcFile(_) => AuthSource::GoogleAuthorizedUserAdcFile,
             UpstreamAuthMode::ServiceAccount { source, .. } => *source,
             UpstreamAuthMode::OAuthRefresh(_) => AuthSource::OAuthRefreshToken,
         }
@@ -544,12 +555,59 @@ impl SearchConsoleClient {
         let provider = self
             .token_provider
             .get_or_try_init(|| async {
-                gcp_auth::provider()
-                    .await
-                    .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string()))
+                match &self.auth_mode {
+                    UpstreamAuthMode::Adc => gcp_auth::provider()
+                        .await
+                        .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string())),
+                    UpstreamAuthMode::AuthorizedUserAdcFile(_) => {
+                        Err(SearchConsoleError::AuthBootstrap(
+                            "server-specific authorized-user ADC is handled by the toolkit refresh-token provider".to_string(),
+                        ))
+                    }
+                    UpstreamAuthMode::ServiceAccount { provider, .. } => Ok(provider.clone()),
+                    UpstreamAuthMode::OAuthRefresh(_) => Err(SearchConsoleError::AuthBootstrap(
+                        "OAuth refresh-token auth is handled by the refresh-token path".to_string(),
+                    )),
+                }
             })
             .await?;
         Ok(provider.clone())
+    }
+
+    async fn authorized_user_adc_provider(
+        &self,
+    ) -> Result<Option<Arc<RefreshTokenProvider>>, SearchConsoleError> {
+        if let Some(provider) = self.oauth_token_provider.get() {
+            return Ok(Some(provider.clone()));
+        }
+
+        let UpstreamAuthMode::AuthorizedUserAdcFile(path) = &self.auth_mode else {
+            return Err(SearchConsoleError::AuthBootstrap(
+                "authorized-user ADC provider requested for a non-ADC auth mode".to_string(),
+            ));
+        };
+
+        let scopes = vec![self.scope.as_ref().to_string()];
+        let adc = match google_authorized_user_adc_from_file(path, scopes) {
+            Ok(adc) => adc,
+            Err(err) if google_adc_file_missing(&err) => return Ok(None),
+            Err(err) => {
+                return Err(SearchConsoleError::AuthBootstrap(format!(
+                    "failed to load authorized-user ADC at '{}': {err}",
+                    path.display()
+                )));
+            }
+        };
+        let provider = Arc::new(
+            RefreshTokenProvider::new(adc.into_refresh_config()).map_err(|err| {
+                SearchConsoleError::AuthBootstrap(format!("invalid authorized-user ADC: {err}"))
+            })?,
+        );
+        let provider = self
+            .oauth_token_provider
+            .get_or_init(|| async { provider })
+            .await;
+        Ok(Some(provider.clone()))
     }
 
     async fn access_token(&self) -> Result<String, SearchConsoleError> {
@@ -558,6 +616,19 @@ impl SearchConsoleClient {
                 let provider = self.token_provider().await?;
                 let token = provider.token(&[self.scope.as_ref()]).await?;
                 Ok(token.as_str().to_string())
+            }
+            UpstreamAuthMode::AuthorizedUserAdcFile(path) => {
+                let provider = self.authorized_user_adc_provider().await?.ok_or_else(|| {
+                    SearchConsoleError::AuthBootstrap(format!(
+                        "server-specific Google Search Console ADC file was not found at '{}'; run `google-search-console-mcp auth login` or set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true to intentionally use conventional shared ADC",
+                        path.display()
+                    ))
+                })?;
+                let token = provider
+                    .access_token()
+                    .await
+                    .map_err(|err| SearchConsoleError::AuthBootstrap(err.to_string()))?;
+                Ok(token.expose_secret().to_string())
             }
             UpstreamAuthMode::ServiceAccount { provider, .. } => {
                 let token = provider.token(&[self.scope.as_ref()]).await?;
@@ -695,11 +766,29 @@ fn select_auth_mode(settings: &Settings) -> Result<UpstreamAuthMode, SearchConso
         (Some(client_secret_path), Some(refresh_token)) => Ok(UpstreamAuthMode::OAuthRefresh(
             Arc::new(parse_oauth_refresh_config(client_secret_path, refresh_token)?),
         )),
-        (None, None) => Ok(UpstreamAuthMode::Adc),
+        (None, None) => {
+            if std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS").is_some() || settings.shared_adc
+            {
+                return Ok(UpstreamAuthMode::Adc);
+            }
+            if let Some(path) = crate::config::server_adc_credentials_path() {
+                return Ok(UpstreamAuthMode::AuthorizedUserAdcFile(path));
+            }
+            Err(SearchConsoleError::AuthBootstrap(
+                "failed to determine the server-specific Google Search Console ADC path; set HOME/XDG_CONFIG_HOME on Unix or APPDATA on Windows, or set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true to intentionally use conventional shared ADC".to_string(),
+            ))
+        }
         _ => Err(SearchConsoleError::AuthBootstrap(
             "GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_CLIENT_SECRET_JSON and GOOGLE_SEARCH_CONSOLE_MCP_OAUTH_REFRESH_TOKEN must both be set or both be unset; refusing to fall back to ADC with partial OAuth configuration".to_string(),
         )),
     }
+}
+
+fn google_adc_file_missing(err: &UpstreamOAuthError) -> bool {
+    matches!(
+        err,
+        UpstreamOAuthError::Io { source, .. } if source.kind() == ErrorKind::NotFound
+    )
 }
 
 pub fn encode_path_segment(value: &str) -> String {
@@ -1281,6 +1370,7 @@ mod tests {
             service_account_json_path: None,
             service_account_json: None,
             quota_project: None,
+            shared_adc: false,
             max_row_limit: 25_000,
             scratchpad_session_ttl: Duration::from_secs(900),
             scratchpad_max_sessions: 64,
