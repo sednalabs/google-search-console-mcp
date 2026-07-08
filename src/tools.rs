@@ -388,28 +388,28 @@ impl SearchConsoleMcp {
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
         let verify_token = args.verify_token || args.verify_access;
-        let token_check = if verify_token {
-            match self.client.verify_token().await {
-                Ok(()) => serde_json::to_value(ProviderAuthCheckStatus::ok())
-                    .unwrap_or_else(|_| json!({ "checked": true, "ok": true })),
-                Err(err) => serde_json::to_value(ProviderAuthCheckStatus::failed(
-                    redact_tool_error_message(&err),
+        let token_check =
+            if verify_token {
+                match self.client.verify_token().await {
+                    Ok(()) => serde_json::to_value(ProviderAuthCheckStatus::ok())
+                        .unwrap_or_else(|_| json!({ "checked": true, "ok": true })),
+                    Err(err) => serde_json::to_value(ProviderAuthCheckStatus::failed(
+                        redact_tool_error_message(&err),
+                    ))
+                    .unwrap_or_else(|_| {
+                        json!({
+                            "checked": true,
+                            "ok": false,
+                            "error": redact_tool_error_message(&err)
+                        })
+                    }),
+                }
+            } else {
+                serde_json::to_value(ProviderAuthCheckStatus::skipped().with_reason(
+                    "set verify_token=true or verify_access=true to prove credentials",
                 ))
-                .unwrap_or_else(|_| {
-                    json!({
-                        "checked": true,
-                        "ok": false,
-                        "error": redact_tool_error_message(&err)
-                    })
-                }),
-            }
-        } else {
-            serde_json::to_value(
-                ProviderAuthCheckStatus::skipped()
-                    .with_reason("set verify_token=true or verify_access=true to prove credentials"),
-            )
-            .unwrap_or_else(|_| json!({ "checked": false }))
-        };
+                .unwrap_or_else(|_| json!({ "checked": false }))
+            };
         let token_ok = token_check.get("ok").and_then(Value::as_bool);
         let access_check = if args.verify_access {
             match self.client.list_sites().await {
@@ -581,10 +581,7 @@ impl SearchConsoleMcp {
                 }),
             );
         }
-        Ok(contract::success(
-            payload,
-            started,
-        ))
+        Ok(contract::success(payload, started))
     }
 
     /// List Search Console properties visible to the authenticated account.
