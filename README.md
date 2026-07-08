@@ -53,6 +53,9 @@ gsc_auth_status { "verify_token": true, "verify_access": true }
 The status response separates `token_check`, `access_check`,
 `operator_scope_check`, `adc_quota_project`, and `runtime_quota_project`.
 For Search Console, `verify_access=true` uses the low-cost `sites.list` probe.
+`adc_quota_project` describes the selected ADC file metadata; `runtime_quota_project`
+describes the optional `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` header setting
+that the server will send upstream.
 
 After auth is proven:
 
@@ -106,9 +109,11 @@ responses.
 
 `gsc_auth_login_command` targets a Search Console-specific Cloud SDK config directory by default so
 Ad Manager, GA4, and other Google MCPs can keep their own OAuth grants and scopes. Its `command`
-field is an argv array and `shell_command` is the copyable shell string. Set `shared_adc=true` only
-when you intentionally want the conventional shared gcloud ADC file. To make the running server use
-that shared ADC file, also set
+field is an argv array and `shell_command` is the copyable shell string. It also returns headless,
+client-id-file, quota-project, API-enable, selected ADC path, scope, `shared_adc`, `next_steps`,
+`notes`, and `after_login` fields using the same Google MCP auth helper shape as other Google
+servers. Set `shared_adc=true` only when you intentionally want the conventional shared gcloud ADC
+file. To make the running server use that shared ADC file, also set
 `GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or start the binary with `--shared-adc`.
 
 For read-only use:
