@@ -6,15 +6,20 @@ Use `gsc_get_started` immediately after install. It returns the recommended auth
 starter tools, and credential options without making an upstream Google request.
 
 Use `gsc_auth_status` to inspect auth configuration. Set `verify_token=true` when you want to prove
-token acquisition and, for operator/write-scope runs, the `operator_scope_check`; the tool never
-returns the token.
+token acquisition, and set `verify_access=true` when you also want the low-cost Search Console
+`sites.list` access probe. The response separates `token_check`, `access_check`,
+`operator_scope_check`, `adc_quota_project`, and `runtime_quota_project`; the tool never returns
+the token. `adc_quota_project` is read from the selected ADC file, while
+`runtime_quota_project` reflects the optional server runtime quota-project header setting.
 
-Use `gsc_auth_login_command` for a copyable Application Default Credentials command. The command
-writes to a Search Console-specific gcloud config directory by default so sibling Google MCPs keep
-their own tokens and scopes. Set `shared_adc=true` only when you intentionally want the conventional
-shared gcloud ADC file; set `GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or start the server with
-`--shared-adc` when the runtime should use that shared file. Set `write_scope=true` only when
-preparing to run operator tools.
+Use `gsc_auth_login_command` for an Application Default Credentials login helper. The `command`
+field is argv, `shell_command` is the copyable shell string, and both target a Search
+Console-specific gcloud config directory by default so sibling Google MCPs keep their own tokens and
+scopes. The response also includes the shared Google MCP headless, client-id-file, quota-project,
+API-enable, selected ADC path, scope, `shared_adc`, `next_steps`, `notes`, and `after_login` fields.
+Set `shared_adc=true` only when you intentionally want the conventional shared gcloud ADC file; set
+`GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or start the server with `--shared-adc` when the runtime
+should use that shared file. Set `write_scope=true` only when preparing to run operator tools.
 
 ## Read Tools
 
@@ -69,6 +74,7 @@ Operator tools also require Google credentials with the write scope:
 https://www.googleapis.com/auth/webmasters
 ```
 
-Before using an operator tool, call `gsc_auth_status` with `verify_token=true` and confirm
-`operator_scope_check.ok` is `true`. If it is false, re-run the ADC login command returned by
-`gsc_auth_login_command` with `write_scope=true`.
+Before using an operator tool, call `gsc_auth_status` with `verify_token=true` and
+`verify_access=true`, then confirm `token_check.ok`, `access_check.ok`, and
+`operator_scope_check.ok` are all `true`. If the operator-scope check is false, re-run the ADC login
+command returned by `gsc_auth_login_command` with `write_scope=true`.

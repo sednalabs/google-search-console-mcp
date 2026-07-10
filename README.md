@@ -28,16 +28,43 @@ cargo run -- --print-tools
 
 The server exposes setup tools that do not return secrets:
 
-- `gsc_get_started` shows the recommended first-run flow.
-- `gsc_auth_status` reports credential source and can optionally verify token acquisition
-  plus operator write-scope readiness.
-- `gsc_auth_login_command` returns a copyable `gcloud` Application Default Credentials command
-  that writes to a Search Console-specific credential file by default.
-- `gsc_sites_list` discovers exact Search Console property strings after auth works.
+- `gsc_get_started`
+- `gsc_auth_status`
+- `gsc_auth_login_command`
 
-For local use, call the MCP setup tool `gsc_auth_login_command`, run the returned shell command,
-then restart any stdio MCP client that keeps long-lived child processes and call
-`gsc_auth_status` with `verify_token=true`.
+For local use, ask the auth-login helper for a server-specific ADC command:
+
+```text
+gsc_auth_login_command { "quota_project": "<PROJECT_ID>" }
+```
+
+Run the returned `shell_command`. The helper uses Google Application Default
+Credentials in a Search-Console-specific gcloud config directory and requests
+the required `cloud-platform` ADC scope plus the read-only Search Console
+scope. Keeping a server-specific ADC file prevents a login for another Google
+MCP from replacing this server's refresh token or scope grant.
+
+Then restart any stdio MCP client that keeps a long-lived child process and call:
+
+```text
+gsc_auth_status { "verify_token": true, "verify_access": true }
+```
+
+The status response separates `token_check`, `access_check`,
+`operator_scope_check`, `adc_quota_project`, and `runtime_quota_project`.
+For Search Console, `verify_access=true` uses the low-cost `sites.list` probe.
+`adc_quota_project` describes the selected ADC file metadata; `runtime_quota_project`
+describes the optional `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` header setting
+that the server will send upstream.
+
+After auth is proven:
+
+1. `gsc_sites_list`
+2. `gsc_search_analytics_query`
+3. `gsc_url_inspection_index_inspect`
+4. `gsc_sitemaps_list`
+5. Operator-only sitemap/site mutations only after enabling the operator
+   profile and confirming `operator_scope_check.ok`
 
 ## Authentication
 
@@ -69,9 +96,10 @@ https://www.googleapis.com/auth/webmasters
 ```
 
 Before submitting/deleting sitemaps or adding/removing sites, call `gsc_auth_status` with
-`verify_token=true` and confirm:
+`verify_token=true` and `verify_access=true`, then confirm:
 
 - `token_check.ok` is `true`
+- `access_check.ok` is `true`
 - `operator_scope_check.ok` is `true`
 
 The server never returns raw tokens, private keys, refresh tokens, or client secrets in tool
@@ -80,9 +108,12 @@ responses.
 ### Application Default Credentials
 
 `gsc_auth_login_command` targets a Search Console-specific Cloud SDK config directory by default so
-Ad Manager, GA4, and other Google MCPs can keep their own OAuth grants and scopes. Set
-`shared_adc=true` only when you intentionally want the conventional shared gcloud ADC file. To make
-the running server use that shared ADC file, also set
+Ad Manager, GA4, and other Google MCPs can keep their own OAuth grants and scopes. Its `command`
+field is an argv array and `shell_command` is the copyable shell string. It also returns headless,
+client-id-file, quota-project, API-enable, selected ADC path, scope, `shared_adc`, `next_steps`,
+`notes`, and `after_login` fields using the same Google MCP auth helper shape as other Google
+servers. Set `shared_adc=true` only when you intentionally want the conventional shared gcloud ADC
+file. To make the running server use that shared ADC file, also set
 `GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true` or start the binary with `--shared-adc`.
 
 For read-only use:
@@ -124,6 +155,7 @@ mount a file and can provide the JSON as a sealed secret.
 | `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH` | unset | Server-specific service-account credential path |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON` | unset | Server-specific raw service-account JSON |
 | `GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT` | unset | Optional `x-goog-user-project` header |
+| `GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC` | `false` | Use conventional shared gcloud ADC instead of the server-specific ADC file |
 | `GOOGLE_SEARCH_CONSOLE_MCP_HTTP_TIMEOUT_MS` | `15000` | Upstream request timeout |
 | `GOOGLE_SEARCH_CONSOLE_MCP_MAX_ROW_LIMIT` | `25000` | Maximum Search Analytics `rowLimit` |
 | `GOOGLE_SEARCH_CONSOLE_MCP_SCRATCHPAD_SESSION_TTL_SECS` | `900` | Scratchpad session idle TTL |
