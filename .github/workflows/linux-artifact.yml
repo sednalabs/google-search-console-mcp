@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+      artifact-digest: ${{ steps.normalize-digest.outputs.digest }}
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
       artifact-url: ${{ steps.upload.outputs.artifact-url }}
 
@@ -129,9 +129,24 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+      - name: Normalize artifact ZIP digest
+        id: normalize-digest
+        env:
+          UPLOAD_ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          digest_hex="${UPLOAD_ARTIFACT_DIGEST#sha256:}"
+
+          if [[ ! "${digest_hex}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::actions/upload-artifact returned an invalid SHA-256 digest"
+            exit 1
+          fi
+
+          printf 'digest=sha256:%s\n' "${digest_hex,,}" >> "${GITHUB_OUTPUT}"
+
       - name: Record immutable artifact identity
         env:
-          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_DIGEST: ${{ steps.normalize-digest.outputs.digest }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
         run: |
