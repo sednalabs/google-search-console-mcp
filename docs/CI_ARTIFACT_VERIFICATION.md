@@ -65,6 +65,7 @@ Finally, verify the checksums embedded inside the CI artifact:
 
 ```bash
 ARTIFACT_DIR="$(mktemp -d)"
+trap 'rm -rf "${ARTIFACT_DIR}"' EXIT
 unzip -q "${ARTIFACT_ZIP}" -d "${ARTIFACT_DIR}"
 (
   cd "${ARTIFACT_DIR}"
