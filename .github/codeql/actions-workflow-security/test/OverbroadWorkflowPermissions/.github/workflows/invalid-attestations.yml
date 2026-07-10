@@ -1,0 +1,55 @@
+name: Invalid attestation permissions fixture
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  unused-permissions:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - run: echo "no attestation sink"
+
+  missing-subject:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-name: artifact.zip
+
+  unpinned-attest:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest@v4
+        with:
+          subject-name: artifact.zip
+          subject-digest: ${{ needs.build.outputs.digest }}
+
+  mixed-predicate-modes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-name: artifact.zip
+          subject-digest: ${{ needs.build.outputs.digest }}
+          sbom-path: artifact.spdx.json
+          predicate-type: https://example.invalid/predicate/v1
+          predicate-path: predicate.json

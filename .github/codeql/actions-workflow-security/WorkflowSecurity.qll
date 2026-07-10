@@ -156,7 +156,9 @@ predicate jobHasSigningMarker(Job job) {
     command.regexpMatch("(?is).*(cosign|sigstore|gitsign|codesign|notarytool|\\.sigstore).*")
   )
   or
-  jobUsesActionMatching(job, "(?i).*(sigstore|cosign|attest|provenance).*", _)
+  jobUsesActionMatching(job, "(?i).*(sigstore|cosign|provenance).*", _)
+  or
+  jobHasNativeAttestationMarker(job)
 }
 
 predicate jobHasMetadataMarker(Job job) {
@@ -166,10 +168,68 @@ predicate jobHasMetadataMarker(Job job) {
   )
 }
 
-predicate jobHasNativeAttestationMarker(Job job) {
-  jobUsesActionMatching(job, "(?i)^actions/attest(-build-provenance)?@.*", _)
+predicate actionInputPresent(UsesStep step, string inputName) {
+  exists(string value |
+    value = step.getArgument(inputName) and
+    value != ""
+  )
+}
+
+/** A consolidated attestation action pinned to an immutable commit. */
+predicate pinnedConsolidatedAttestStep(UsesStep step) {
+  step.getCallee().regexpMatch("(?i)^actions/attest$") and
+  step.getVersion().regexpMatch("(?i)^[0-9a-f]{40}$")
+}
+
+predicate attestStepHasValidSubject(UsesStep step) {
+  actionInputPresent(step, "subject-path") and
+  not actionInputPresent(step, "subject-digest") and
+  not actionInputPresent(step, "subject-checksums")
   or
-  jobUsesActionMatching(job, "(?i)^github/actions/attest-build-provenance@.*", _)
+  actionInputPresent(step, "subject-digest") and
+  actionInputPresent(step, "subject-name") and
+  not actionInputPresent(step, "subject-path") and
+  not actionInputPresent(step, "subject-checksums")
+  or
+  actionInputPresent(step, "subject-checksums") and
+  not actionInputPresent(step, "subject-path") and
+  not actionInputPresent(step, "subject-digest")
+}
+
+predicate attestStepHasCustomPredicateInput(UsesStep step) {
+  actionInputPresent(step, "predicate-type")
+  or
+  actionInputPresent(step, "predicate")
+  or
+  actionInputPresent(step, "predicate-path")
+}
+
+predicate legitimateConsolidatedProvenanceStep(UsesStep step) {
+  pinnedConsolidatedAttestStep(step) and
+  attestStepHasValidSubject(step) and
+  not actionInputPresent(step, "sbom-path") and
+  not attestStepHasCustomPredicateInput(step)
+}
+
+predicate legitimateConsolidatedSbomStep(UsesStep step) {
+  pinnedConsolidatedAttestStep(step) and
+  attestStepHasValidSubject(step) and
+  actionInputPresent(step, "sbom-path") and
+  not attestStepHasCustomPredicateInput(step)
+}
+
+/** A supported provenance or SBOM invocation, rather than an action-name allowlist. */
+predicate legitimateConsolidatedAttestStep(UsesStep step) {
+  legitimateConsolidatedProvenanceStep(step)
+  or
+  legitimateConsolidatedSbomStep(step)
+}
+
+predicate jobHasNativeAttestationMarker(Job job) {
+  exists(UsesStep step |
+    step.getEnclosingJob() = job and
+    legitimateConsolidatedAttestStep(step)
+  )
 }
 
 predicate jobHasRepoApprovedProvenance(Job job) {
