@@ -12,6 +12,7 @@ permissions:
 env:
   ARTIFACT_NAME: google-search-console-mcp-linux-x86_64
   ARTIFACT_ZIP: google-search-console-mcp-linux-x86_64.zip
+  CARGO_AUDITABLE_VERSION: 0.7.5
   SBOM_NAME: google-search-console-mcp-linux-x86_64.spdx.json
 
 jobs:
@@ -34,16 +35,21 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Build release binary
-        run: cargo build --release --locked --bin google-search-console-mcp
+      - name: Install pinned auditable build tool
+        # taiki-e/install-action v2.83.0
+        uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb
+        with:
+          tool: cargo-auditable@0.7.5
+
+      - name: Build auditable release binary
+        run: cargo auditable build --release --locked --bin google-search-console-mcp
 
       - name: Stage artifact
         run: |
           set -euo pipefail
-          mkdir -p dist sbom-input
+          mkdir -p dist
           cp target/release/google-search-console-mcp dist/google-search-console-mcp
           chmod 0755 dist/google-search-console-mcp
-          cp dist/google-search-console-mcp Cargo.toml Cargo.lock sbom-input/
 
       - name: Install pinned SBOM generator
         id: syft
@@ -57,10 +63,21 @@ jobs:
           SYFT_CMD: ${{ steps.syft.outputs.cmd }}
         run: |
           set -euo pipefail
-          "${SYFT_CMD}" scan "dir:sbom-input" \
+          "${SYFT_CMD}" scan "file:dist/google-search-console-mcp" \
             --source-name "${GITHUB_REPOSITORY}" \
             --source-version "${GITHUB_SHA}" \
             --output "spdx-json=dist/${SBOM_NAME}"
+
+          rust_packages="$(jq \
+            '[.packages[]?
+              | select(any(.externalRefs[]?;
+                  .referenceType == "purl"
+                  and (.referenceLocator | startswith("pkg:cargo/"))))]
+              | length' \
+            "dist/${SBOM_NAME}")"
+          dependency_relationships="$(jq \
+            '[.relationships[]? | select(.relationshipType == "DEPENDENCY_OF")] | length' \
+            "dist/${SBOM_NAME}")"
 
           jq -e \
             --arg repository "${GITHUB_REPOSITORY}" \
@@ -70,6 +87,16 @@ jobs:
               and .name == $repository
               and any(.packages[]?; .name == $repository and .versionInfo == $source_sha)' \
             "dist/${SBOM_NAME}" > /dev/null
+
+          if (( rust_packages < 2 || dependency_relationships < 1 )); then
+            echo "SBOM dependency graph is empty or incomplete: rust_packages=${rust_packages}, dependency_relationships=${dependency_relationships}" >&2
+            exit 1
+          fi
+
+          {
+            echo "RUST_PACKAGE_COUNT=${rust_packages}"
+            echo "DEPENDENCY_RELATIONSHIP_COUNT=${dependency_relationships}"
+          } >> "${GITHUB_ENV}"
 
       - name: Write artifact manifest
         run: |
@@ -83,7 +110,10 @@ jobs:
             echo "# source_sha=${GITHUB_SHA}"
             echo "# target=x86_64-unknown-linux-gnu"
             echo "# sbom=${SBOM_NAME}"
+            echo "# auditable_builder=cargo-auditable-v${CARGO_AUDITABLE_VERSION}"
             echo "# sbom_generator=syft-v1.46.0"
+            echo "# sbom_rust_packages=${RUST_PACKAGE_COUNT}"
+            echo "# sbom_dependency_relationships=${DEPENDENCY_RELATIONSHIP_COUNT}"
             (
               cd dist
               sha256sum google-search-console-mcp "${SBOM_NAME}"
