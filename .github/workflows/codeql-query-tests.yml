@@ -62,3 +62,11 @@ jobs:
           "${{ steps.setup-codeql.outputs.codeql-path }}" query compile \
             --search-path .github/codeql \
             .github/codeql/actions-workflow-security/*.ql
+
+      - name: Run Actions query tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ steps.setup-codeql.outputs.codeql-path }}" test run \
+            --search-path .github/codeql \
+            .github/codeql/actions-workflow-security/test

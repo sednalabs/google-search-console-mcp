@@ -1,0 +1,33 @@
+name: Safe attestation permissions fixture
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-name: artifact.zip
+          subject-digest: ${{ needs.build.outputs.digest }}
+
+  sbom:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-name: artifact.zip
+          subject-digest: ${{ needs.build.outputs.digest }}
+          sbom-path: artifact.spdx.json
