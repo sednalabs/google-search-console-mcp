@@ -23,3 +23,5 @@ cargo run -- --profile operator --print-tool-schema | jq -e '.tools | map(.name)
 ```
 
 Use hosted GitHub validation as the shared proof surface for public changes whenever available.
+The coverage workflow always publishes a portable Cobertura report. Its additional GitHub Code
+Quality upload is best-effort because that repository feature may not be enabled.
