@@ -8,7 +8,7 @@ The first release focuses on direct, low-overhead access to the official Search 
 - list and inspect Search Console properties
 - query Search Analytics performance data
 - inspect URL indexing status
-- list and retrieve sitemap metadata
+- list and retrieve sitemap metadata with explicit warning-diagnostic limits
 - submit/delete sitemaps and add/remove sites only when the operator profile is enabled
 - expose `find_tools` metadata for deferred-loading and tool-search clients
 
@@ -159,6 +159,28 @@ mount a file and can provide the JSON as a sealed secret.
 - `gsc_sitemap_delete` (`operator`)
 - `gsc_site_add` (`operator`)
 - `gsc_site_delete` (`operator`)
+
+### Sitemap warning diagnostics
+
+The [Google Sitemap resource](https://developers.google.com/webmaster-tools/v1/sitemaps)
+provides warning/error **counts**, not issue messages or affected URLs. Both sitemap
+read tools preserve Google's response in `data` and add
+`meta.sitemap_diagnostics` with `warning_details_available: false`, reason
+`not_exposed_by_supported_api`, source and report links, and diagnostic next steps.
+This is a source limitation, not missing authentication or an adapter-dropped
+explanation. Missing or null counts remain unknown; they are never filled with zero.
+Zero child warnings do not explain or clear an index warning.
+
+Use `gsc_sitemap_get` for the exact property and `feed_path`, comparing
+`lastDownloaded` and `isPending` with independent public XML checks. For an index,
+use `gsc_sitemaps_list` with `sitemap_index` to inspect child metadata.
+The [Sitemaps report](https://search.google.com/search-console/sitemaps) is a manual
+diagnostic path: select the same property and sitemap and inspect any available
+details. It does not guarantee explanations for every API warning. Google's
+[report guidance](https://support.google.com/webmasters/answer/7451001) describes
+available error details. Do not attribute an independently discovered XML issue to
+a Google warning without corroboration. No broader OAuth scope, extra API request,
+browser scraping or sitemap mutation is needed for this diagnostic metadata.
 
 All tool responses use a Contract V1 envelope:
 
