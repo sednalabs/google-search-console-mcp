@@ -964,7 +964,7 @@ impl SearchConsoleMcp {
             .list_sitemaps(&args.site_url, args.sitemap_index)
             .await
         {
-            Ok(value) => Ok(contract::success(value, started)),
+            Ok(value) => Ok(sitemap_success(value, started)),
             Err(err) => Ok(contract::error(err, started)),
         }
     }
@@ -984,7 +984,7 @@ impl SearchConsoleMcp {
             .get_sitemap(&args.site_url, &args.feed_path)
             .await
         {
-            Ok(value) => Ok(contract::success(value, started)),
+            Ok(value) => Ok(sitemap_success(value, started)),
             Err(err) => Ok(contract::error(err, started)),
         }
     }
@@ -1485,9 +1485,78 @@ fn shell_join_with_cloudsdk_config(parts: &[String], cloudsdk_config: Option<&Pa
     }
 }
 
+/// Keep provider data intact: a count is not an explanation, and absence is not zero.
+fn sitemap_success(data: Value, started: Instant) -> CallToolResult {
+    contract::success_with_meta(
+        data,
+        json!({
+            "sitemap_diagnostics": {
+                "warning_details_available": false,
+                "warning_details_reason": "not_exposed_by_supported_api",
+                "source": "google_search_console_sitemaps_api",
+                "source_documentation_url": "https://developers.google.com/webmaster-tools/v1/sitemaps",
+                "sitemaps_report_url": "https://search.google.com/search-console/sitemaps",
+                "limitations": "The supported Sitemap resource exposes warning and error counts, not issue messages or affected URLs. Counts are not explanations; missing counts are unknown, not zero. Child counts do not explain or clear an index warning.",
+                "next_steps": [
+                    "Use gsc_sitemap_get with the exact property and feed_path to inspect counts, lastDownloaded and isPending; this does not fetch warning explanations.",
+                    "For an index, use gsc_sitemaps_list with the same property and sitemap_index to inspect child metadata.",
+                    "Open the Sitemaps report, select the same property and exact sitemap, and inspect any available details. The UI is a manual diagnostic path, not a guarantee that these API warnings have explanations there.",
+                    "Validate the public sitemap XML and referenced URLs independently; treat findings as separate evidence, not Google's warning cause without corroboration."
+                ]
+            }
+        }),
+        started,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sitemap_diagnostics_preserve_counts_and_unknowns_without_explanations() {
+        for data in [
+            json!({"path": "https://example.com/sitemap.xml", "warnings": "3", "errors": "0"}),
+            json!({"warnings": "0", "errors": 0}),
+            json!({"warnings": null}),
+            json!({}),
+            json!({"sitemap": [{"warnings": "3"}, {"warnings": "0"}, {}]}),
+        ] {
+            let result = sitemap_success(data.clone(), Instant::now());
+            let mut actual = result.structured_content.unwrap();
+            assert!(
+                actual["meta"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("elapsed_ms")
+                    .unwrap()
+                    .is_u64()
+            );
+            assert_eq!(
+                actual,
+                json!({
+                    "ok": true,
+                    "data": data,
+                    "meta": {
+                        "sitemap_diagnostics": {
+                            "warning_details_available": false,
+                            "warning_details_reason": "not_exposed_by_supported_api",
+                            "source": "google_search_console_sitemaps_api",
+                            "source_documentation_url": "https://developers.google.com/webmaster-tools/v1/sitemaps",
+                            "sitemaps_report_url": "https://search.google.com/search-console/sitemaps",
+                            "limitations": "The supported Sitemap resource exposes warning and error counts, not issue messages or affected URLs. Counts are not explanations; missing counts are unknown, not zero. Child counts do not explain or clear an index warning.",
+                            "next_steps": [
+                                "Use gsc_sitemap_get with the exact property and feed_path to inspect counts, lastDownloaded and isPending; this does not fetch warning explanations.",
+                                "For an index, use gsc_sitemaps_list with the same property and sitemap_index to inspect child metadata.",
+                                "Open the Sitemaps report, select the same property and exact sitemap, and inspect any available details. The UI is a manual diagnostic path, not a guarantee that these API warnings have explanations there.",
+                                "Validate the public sitemap XML and referenced URLs independently; treat findings as separate evidence, not Google's warning cause without corroboration."
+                            ]
+                        }
+                    }
+                })
+            );
+        }
+    }
 
     #[test]
     fn registered_tool_print_helpers_are_metadata_only() {
