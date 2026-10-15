@@ -2,8 +2,11 @@ use std::path::Path;
 use std::time::Instant;
 
 use mcp_toolkit_auth::provider_auth::{
-    GoogleProviderAuthConfig, GoogleProviderAuthSetupPlan, format_provider_auth_command,
-    google_adc_quota_project_command,
+    GoogleProviderAuthConfig, GoogleProviderAuthLoginOptions, ProviderAuthCheckStatus,
+    ProviderQuotaProjectStatus, format_google_cloudsdk_command, google_adc_quota_project_command,
+};
+use mcp_toolkit_auth::upstream_oauth::{
+    UpstreamOAuthError, google_authorized_user_adc_metadata_from_file,
 };
 use mcp_toolkit_core::tool_inventory::{ToolOperation, ToolSearchFilter, ToolSearchResponse};
 use mcp_toolkit_core::tool_schema::tool_schema_snapshot_value;
@@ -59,6 +62,9 @@ pub struct AuthStatusArgs {
     /// When true, acquire a Google access token to prove credentials work. The token is never returned.
     #[serde(default)]
     pub verify_token: bool,
+    /// When true, make a low-cost Search Console sites.list call to prove API access.
+    #[serde(default)]
+    pub verify_access: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -374,30 +380,79 @@ impl SearchConsoleMcp {
     /// Explain configured auth without exposing secrets.
     #[tool(
         name = "gsc_auth_status",
-        description = "Explain configured Google auth source and optionally verify token acquisition without returning secrets."
+        description = "Explain configured Google auth source and optionally verify token acquisition and Search Console access without returning secrets."
     )]
     async fn gsc_auth_status(
         &self,
         Parameters(args): Parameters<AuthStatusArgs>,
     ) -> Result<CallToolResult, crate::McpError> {
         let started = Instant::now();
-        let token_check = if args.verify_token {
-            match self.client.verify_token().await {
-                Ok(()) => json!({ "checked": true, "ok": true }),
-                Err(err) => json!({
-                    "checked": true,
-                    "ok": false,
-                    "error": redact_tool_error_message(&err)
+        let verify_token = args.verify_token || args.verify_access;
+        let token_check =
+            if verify_token {
+                match self.client.verify_token().await {
+                    Ok(()) => serde_json::to_value(ProviderAuthCheckStatus::ok())
+                        .unwrap_or_else(|_| json!({ "checked": true, "ok": true })),
+                    Err(err) => serde_json::to_value(ProviderAuthCheckStatus::failed(
+                        redact_tool_error_message(&err),
+                    ))
+                    .unwrap_or_else(|_| {
+                        json!({
+                            "checked": true,
+                            "ok": false,
+                            "error": redact_tool_error_message(&err)
+                        })
+                    }),
+                }
+            } else {
+                serde_json::to_value(ProviderAuthCheckStatus::skipped().with_reason(
+                    "set verify_token=true or verify_access=true to prove credentials",
+                ))
+                .unwrap_or_else(|_| json!({ "checked": false }))
+            };
+        let token_ok = token_check.get("ok").and_then(Value::as_bool);
+        let access_check = if args.verify_access {
+            match self.client.list_sites().await {
+                Ok(payload) => {
+                    let sample_property_count = payload
+                        .get("siteEntry")
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0);
+                    serde_json::to_value(
+                        ProviderAuthCheckStatus::ok()
+                            .with_metadata("sample_property_count", json!(sample_property_count)),
+                    )
+                    .unwrap_or_else(|_| {
+                        json!({
+                            "checked": true,
+                            "ok": true,
+                            "sample_property_count": sample_property_count
+                        })
+                    })
+                }
+                Err(err) => serde_json::to_value(ProviderAuthCheckStatus::failed(
+                    redact_tool_error_message(&err),
+                ))
+                .unwrap_or_else(|_| {
+                    json!({
+                        "checked": true,
+                        "ok": false,
+                        "error": redact_tool_error_message(&err)
+                    })
                 }),
             }
         } else {
-            json!({ "checked": false })
+            serde_json::to_value(
+                ProviderAuthCheckStatus::skipped()
+                    .with_reason("set verify_access=true to call Search Console sites.list"),
+            )
+            .unwrap_or_else(|_| json!({ "checked": false }))
         };
-        let token_ok = token_check.get("ok").and_then(Value::as_bool);
         let operator_scope_relevant =
             self.profile.allows_mutation() || self.client.scope() == WRITE_SCOPE;
         let should_check_operator_scope =
-            operator_scope_relevant && args.verify_token && token_ok == Some(true);
+            operator_scope_relevant && verify_token && token_ok == Some(true);
         let operator_scope_check = if should_check_operator_scope {
             match self.client.verify_operator_scope().await {
                 Ok(check) => operator_scope_check_to_json(check),
@@ -408,7 +463,7 @@ impl SearchConsoleMcp {
                     "error": redact_tool_error_message(&err),
                 }),
             }
-        } else if operator_scope_relevant && args.verify_token {
+        } else if operator_scope_relevant && verify_token {
             json!({
                 "checked": true,
                 "ok": false,
@@ -436,11 +491,14 @@ impl SearchConsoleMcp {
                 "operator_tools_enabled": self.profile.allows_mutation(),
                 "quota_project_configured": self.client.quota_project_configured(),
                 "adc_file": selected_adc_file_status(),
+                "adc_quota_project": adc_quota_project_status(),
+                "runtime_quota_project": runtime_quota_project_status(self.client.quota_project_hint()),
                 "detected_env": auth_env_presence(),
                 "token_check": token_check,
+                "access_check": access_check,
                 "operator_scope_check": operator_scope_check,
                 "next_steps": auth_next_steps(
-                    args.verify_token,
+                    verify_token,
                     token_ok,
                     operator_scope_relevant,
                     operator_scope_ok,
@@ -487,65 +545,43 @@ impl SearchConsoleMcp {
         } else {
             server_adc_credentials_path()
         };
-        let command = gcloud_adc_login_command(
-            scope,
-            args.client_id_file.as_deref().map(Path::new),
-            args.headless,
+        let contract = gsc_provider_auth_config(scope).adc_login_command_contract(
+            &GoogleProviderAuthLoginOptions::new(scope)
+                .with_headless(args.headless)
+                .with_client_id_file(args.client_id_file.clone())
+                .with_quota_project(args.quota_project.clone())
+                .with_cloudsdk_config(
+                    cloudsdk_config
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                )
+                .with_credential_file(
+                    credential_file
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                )
+                .with_shared_adc(shared_adc)
+                .with_operator_scope_requested(args.write_scope)
+                .with_notes(vec![
+                    "By default this command writes a Google Search Console-specific ADC file for this OS user.".to_string(),
+                    "Set shared_adc=true only when you intentionally want the conventional shared gcloud ADC file; set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true when the runtime should use it.".to_string(),
+                    "No token or client secret is returned by this tool.".to_string(),
+                    "Use write_scope=true only when preparing credentials for operator sitemap/site mutations.".to_string(),
+                ])
+                .with_after_login("Restart stdio MCP clients that keep long-lived server processes, then call gsc_auth_status with verify_token=true or verify_access=true."),
         );
-        let headless_command =
-            gcloud_adc_login_command(scope, args.client_id_file.as_deref().map(Path::new), true);
-        let setup_plan = gsc_auth_setup_plan(scope);
-        let quota_project = args.quota_project.as_deref();
-        let follow_up_commands = quota_project
-            .map(|project| {
-                vec![shell_join_with_cloudsdk_config(
-                    &gcloud_set_quota_project_command(project),
-                    cloudsdk_config.as_deref(),
-                )]
-            })
-            .unwrap_or_default();
-        Ok(contract::success(
-            json!({
-                "command": shell_join_with_cloudsdk_config(&command, cloudsdk_config.as_deref()),
-                "headless_command": shell_join_with_cloudsdk_config(&headless_command, cloudsdk_config.as_deref()),
-                "client_id_file_command": shell_join_with_cloudsdk_config(
-                    &gcloud_adc_login_command(scope, Some(Path::new("/path/to/client_id.json")), args.headless),
-                    cloudsdk_config.as_deref(),
-                ),
-                "client_id_file_headless_command": shell_join_with_cloudsdk_config(
-                    &gcloud_adc_login_command(scope, Some(Path::new("/path/to/client_id.json")), true),
-                    cloudsdk_config.as_deref(),
-                ),
-                "quota_project_command": shell_join_with_cloudsdk_config(
-                    &gcloud_set_quota_project_command("YOUR_PROJECT"),
-                    cloudsdk_config.as_deref(),
-                ),
-                "api_enable_command": setup_plan.api_enable.as_ref().map(|command| command.shell.as_str()),
-                "follow_up_commands": follow_up_commands,
-                "adc_scopes": setup_plan.scopes.clone(),
-                "cloudsdk_config": cloudsdk_config.as_ref().map(|path| path.display().to_string()),
-                "credential_file": credential_file.as_ref().map(|path| path.display().to_string()),
-                "shared_adc": shared_adc,
-                "scope": scope,
-                "write_scope": args.write_scope,
-                "headless": args.headless,
-                "client_id_file": args.client_id_file,
-                "quota_project": args.quota_project,
-                "next_steps": setup_plan.next_steps.clone(),
-                "notes": [
-                    "By default this command writes a Google Search Console-specific ADC file for this OS user.",
-                    "Set shared_adc=true only when you intentionally want the conventional shared gcloud ADC file; set GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC=true when the runtime should use it.",
-                    "No token or client secret is returned by this tool.",
-                    "Use write_scope=true only when preparing credentials for operator sitemap/site mutations."
-                ],
-                "after_login": "Restart stdio MCP clients that keep long-lived server processes, then call gsc_auth_status with verify_token=true.",
-                "service_account_alternative": {
+        let mut payload = serde_json::to_value(contract).unwrap_or_else(|_| json!({}));
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("write_scope".to_string(), json!(args.write_scope));
+            object.insert(
+                "service_account_alternative".to_string(),
+                json!({
                     "standard_env": "GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json",
                     "server_specific_path_env": "GOOGLE_SEARCH_CONSOLE_MCP_SERVICE_ACCOUNT_JSON_PATH=/path/to/service-account.json"
-                }
-            }),
-            started,
-        ))
+                }),
+            );
+        }
+        Ok(contract::success(payload, started))
     }
 
     /// List Search Console properties visible to the authenticated account.
@@ -1319,6 +1355,14 @@ fn auth_env_presence() -> Value {
     })
 }
 
+fn selected_adc_credentials_path() -> Option<std::path::PathBuf> {
+    if env_bool_true("GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC") {
+        conventional_adc_credentials_path()
+    } else {
+        server_adc_credentials_path()
+    }
+}
+
 fn selected_adc_file_status() -> Value {
     if env_bool_true("GOOGLE_SEARCH_CONSOLE_MCP_SHARED_ADC") {
         return conventional_adc_credentials_path()
@@ -1349,6 +1393,48 @@ fn selected_adc_file_status() -> Value {
         "role": "not_configured",
         "path": null
     })
+}
+
+fn adc_quota_project_status() -> Value {
+    let status = match selected_adc_credentials_path() {
+        Some(path) => match google_authorized_user_adc_metadata_from_file(&path) {
+            Ok(Some(metadata)) => metadata
+                .quota_project_id()
+                .map(|project| {
+                    ProviderQuotaProjectStatus::configured(project).with_source("selected_adc_file")
+                })
+                .unwrap_or_else(|| {
+                    ProviderQuotaProjectStatus::missing().with_source("selected_adc_file")
+                }),
+            Ok(None) => ProviderQuotaProjectStatus::missing()
+                .with_source("selected_adc_file")
+                .with_error("ADC credential file is not present"),
+            Err(err) => ProviderQuotaProjectStatus::missing()
+                .with_source("selected_adc_file")
+                .with_error(redact_adc_metadata_error(&err)),
+        },
+        None => ProviderQuotaProjectStatus::missing().with_source("selected_adc_file"),
+    };
+    serde_json::to_value(status).unwrap_or_else(|_| json!({ "configured": false }))
+}
+
+fn runtime_quota_project_status(project: Option<&str>) -> Value {
+    let status = project
+        .map(|project| {
+            ProviderQuotaProjectStatus::configured(project)
+                .with_source("GOOGLE_SEARCH_CONSOLE_MCP_QUOTA_PROJECT_or_cli")
+        })
+        .unwrap_or_else(|| ProviderQuotaProjectStatus::missing().with_source("runtime_config"));
+    serde_json::to_value(status).unwrap_or_else(|_| json!({ "configured": false }))
+}
+
+fn redact_adc_metadata_error(err: &UpstreamOAuthError) -> String {
+    let redacted = contract::redact_secret_text(&err.to_string());
+    if redacted.is_empty() {
+        "failed to inspect ADC metadata".to_string()
+    } else {
+        redacted
+    }
 }
 
 fn env_bool_true(name: &str) -> bool {
@@ -1427,10 +1513,6 @@ fn auth_next_steps(
     }
 }
 
-fn gsc_auth_setup_plan(scope: &str) -> GoogleProviderAuthSetupPlan {
-    gsc_provider_auth_config(scope).adc_setup_plan()
-}
-
 fn gsc_provider_auth_config(scope: &str) -> GoogleProviderAuthConfig {
     GoogleProviderAuthConfig::new("Search Console API", vec![scope.to_string()])
         .with_api_service_name("searchconsole.googleapis.com")
@@ -1453,36 +1535,9 @@ fn gcloud_set_quota_project_command(project: &str) -> Vec<String> {
     google_adc_quota_project_command(project)
 }
 
-fn shell_join(parts: &[String]) -> String {
-    format_provider_auth_command(parts)
-}
-
 fn shell_join_with_cloudsdk_config(parts: &[String], cloudsdk_config: Option<&Path>) -> String {
-    if let Some(dir) = cloudsdk_config {
-        let dir_str = shell_join(&[dir.display().to_string()]);
-        let command = shell_join(parts);
-        if command.is_empty() {
-            #[cfg(windows)]
-            {
-                format!("$env:CLOUDSDK_CONFIG={dir_str}")
-            }
-            #[cfg(not(windows))]
-            {
-                format!("CLOUDSDK_CONFIG={dir_str}")
-            }
-        } else {
-            #[cfg(windows)]
-            {
-                format!("$env:CLOUDSDK_CONFIG={dir_str}; {command}")
-            }
-            #[cfg(not(windows))]
-            {
-                format!("CLOUDSDK_CONFIG={dir_str} {command}")
-            }
-        }
-    } else {
-        shell_join(parts)
-    }
+    let config = cloudsdk_config.map(|dir| dir.display().to_string());
+    format_google_cloudsdk_command(parts, config.as_deref())
 }
 
 #[cfg(test)]
@@ -1529,5 +1584,56 @@ mod tests {
 
         #[cfg(not(windows))]
         assert!(command.starts_with("CLOUDSDK_CONFIG='/tmp/gsc adc' gcloud auth"));
+    }
+
+    #[test]
+    fn auth_login_command_contract_matches_shared_helper_shape() {
+        let payload = serde_json::to_value(
+            gsc_provider_auth_config(DEFAULT_SCOPE).adc_login_command_contract(
+                &GoogleProviderAuthLoginOptions::new(DEFAULT_SCOPE)
+                    .with_headless(true)
+                    .with_cloudsdk_config(Some("/tmp/gsc adc".to_string()))
+                    .with_credential_file(Some(
+                        "/tmp/gsc adc/application_default_credentials.json".to_string(),
+                    )),
+            ),
+        )
+        .expect("serialize auth login command contract");
+        let mut keys = payload
+            .as_object()
+            .expect("auth login contract object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+
+        assert_eq!(
+            keys,
+            vec![
+                "adc_scopes",
+                "after_login",
+                "api_enable_command",
+                "api_enable_command_argv",
+                "client_id_file_command",
+                "client_id_file_headless_command",
+                "client_id_file_headless_shell_command",
+                "client_id_file_shell_command",
+                "cloudsdk_config",
+                "command",
+                "credential_file",
+                "follow_up_commands",
+                "headless_command",
+                "headless_shell_command",
+                "next_steps",
+                "notes",
+                "operator_scope_requested",
+                "quota_project",
+                "quota_project_command",
+                "quota_project_command_argv",
+                "scope",
+                "shared_adc",
+                "shell_command",
+            ]
+        );
     }
 }

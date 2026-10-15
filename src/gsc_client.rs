@@ -218,6 +218,10 @@ impl SearchConsoleClient {
         self.quota_project.is_some()
     }
 
+    pub fn quota_project_hint(&self) -> Option<&str> {
+        self.quota_project.as_deref()
+    }
+
     pub async fn verify_token(&self) -> Result<(), SearchConsoleError> {
         self.access_token().await.map(|_| ())
     }
